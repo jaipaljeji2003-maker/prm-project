@@ -622,21 +622,24 @@ async function leadRows(env, params) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
 
+  const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
   const win = operationalWindow(env);
 
-  const ackColName = (zoneWanted !== "ALL") ? (ZONE_ACK_COL[String(zoneWanted).toUpperCase()] || null) : null;
+  const ackColName = (zoneWanted !== "ALL")
+    ? (ZONE_ACK_COL[String(zoneWanted).toUpperCase()] || null)
+    : null;
   const ackCol = ackColName ? hdr[ackColName] : null;
 
+  // Store [timeMs, obj] so sort is cheap (no Date parsing in sort)
   const out = [];
+
   for (const r of rows) {
     if (!r || !r.length) continue;
 
     const t = r[IX.time];
     if (t == null || t === "") continue;
 
-    const tz = env.TIMEZONE || DEFAULT_TZ;
     const dt = parseDbTime(t, tz);
-
     if (!dt || isNaN(dt.getTime())) continue;
     if (dt < win.start) continue;
 
@@ -664,7 +667,9 @@ async function leadRows(env, params) {
       key:        String(r[IX.key] || ""),
       type:       String(r[IX.type] || ""),
       flight,
-      timeEst:    toIso(r[IX.time], tz),
+      // Use the already-parsed dt instead of re-parsing with toIso(...)
+      timeEst:    dt.toISOString(),
+
       gate:       String(r[IX.gate] || ""),
       zone:       String(r[IX.zoneCur] || ""),
 
@@ -684,12 +689,13 @@ async function leadRows(env, params) {
       zoneTo,
     };
 
-    out.push(applyPatchesToRowObj(obj));
+    out.push([dt.getTime(), applyPatchesToRowObj(obj)]);
   }
 
-  out.sort((a, b) => new Date(a.timeEst).getTime() - new Date(b.timeEst).getTime());
-  return out;
+  out.sort((a, b) => a[0] - b[0]);
+  return out.map(x => x[1]);
 }
+
 
 // ---------- Writes ----------
 async function updateDispatch(env, payload) {
