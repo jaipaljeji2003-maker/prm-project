@@ -29,6 +29,7 @@ const DB_CACHE_MS  = 2_000;          // reduce read load (still feels realtime)
 const HDR_CACHE_MS = 5 * 60_000;
 const IDX_CACHE_MS = 30_000;
 const USERS_CACHE_MS = 120_000;
+const ROW_CACHE_MS = 1_000;
 
 const DEFAULT_TZ = "America/Toronto";
 
@@ -41,6 +42,31 @@ const ZONE_ACK_COL = {
   "T1":       "T1_Ack",
   "UNASSIGNED":"Unassigned_Ack",
 };
+
+const _rowCache = new Map();
+const _rowInflight = new Map();
+
+// Sheets remain the single source of truth; this short cache only smooths bursty reads.
+async function cachedRows(key, fn) {
+  const now = Date.now();
+  const hit = _rowCache.get(key);
+  if (hit && (now - hit.ts) <= ROW_CACHE_MS) return hit.val;
+
+  if (_rowInflight.has(key)) return _rowInflight.get(key);
+
+  const p = (async () => {
+    try {
+      const val = await fn();
+      _rowCache.set(key, { ts: Date.now(), val });
+      return val;
+    } finally {
+      _rowInflight.delete(key);
+    }
+  })();
+
+  _rowInflight.set(key, p);
+  return p;
+}
 
 const json = (obj, init = {}) => {
   const headers = new Headers(init.headers || {});
@@ -549,7 +575,7 @@ const IX = {
   alertText: 29,
 };
 
-async function dispatchRows(env) {
+async function dispatchRowsImpl(env) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
@@ -607,6 +633,10 @@ async function dispatchRows(env) {
   return out.map(x => x[1]);
 }
 
+async function dispatchRows(env) {
+  return cachedRows("dispatch", () => dispatchRowsImpl(env));
+}
+
 
 function isTrue(v) {
   if (v === true) return true;
@@ -614,7 +644,7 @@ function isTrue(v) {
   return s === "true" || s === "1" || s === "yes" || s === "y";
 }
 
-async function leadRows(env, params) {
+async function leadRowsImpl(env, params) {
   const zoneWanted = normalizeZone(params.zone || "ALL");
   const typeFilter = String(params.type || "ALL").toUpperCase();
   const q = String(params.q || "").trim().toUpperCase().replace(/\s+/g, "");
@@ -694,6 +724,17 @@ async function leadRows(env, params) {
 
   out.sort((a, b) => a[0] - b[0]);
   return out.map(x => x[1]);
+}
+
+function leadCacheKey(params) {
+  const zoneWanted = normalizeZone(params.zone || "ALL");
+  const typeFilter = String(params.type || "ALL").toUpperCase();
+  const q = String(params.q || "").trim().toUpperCase().replace(/\s+/g, "");
+  return `lead:${zoneWanted}|${typeFilter}|${q}`;
+}
+
+async function leadRows(env, params) {
+  return cachedRows(leadCacheKey(params), () => leadRowsImpl(env, params));
 }
 
 

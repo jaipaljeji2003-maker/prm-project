@@ -8,7 +8,7 @@
 </head>
 <body>
   <div class="topbar">
-    <button onclick="load(true)">Refresh</button>
+    <button onclick="manualRefresh()">Refresh</button>
     <button onclick="logout()">Logout</button>
 
     <div class="searchWrap">
@@ -43,10 +43,17 @@
     const LS_TOKEN = "PRM_TOKEN";
     const LS_USER  = "PRM_USER";
 
+    const POLL_MS = 10_000;
+    const BACKOFF_START_MS = 2_000;
+    const BACKOFF_MAX_MS = 15_000;
+
     let rows = [];
     let filterType = "ALL";
     let typingUntil = 0;
     const saveTimers = new Map();
+
+    let pollTimer = null;
+    let backoffMs = 0;
 
     function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
     function hardRedirectToLogin() { window.location.href = "/"; }
@@ -57,6 +64,33 @@
       localStorage.removeItem(LS_TOKEN);
       localStorage.removeItem(LS_USER);
       hardRedirectToLogin();
+    }
+
+    function resetBackoff() { backoffMs = 0; }
+    function nextBackoff() {
+      backoffMs = backoffMs ? Math.min(backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_START_MS;
+      return backoffMs;
+    }
+
+    function scheduleNextPoll(delay) {
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = setTimeout(pollLoop, delay);
+    }
+
+    async function pollLoop() {
+      const ok = await load(false);
+      if (ok) resetBackoff();
+      scheduleNextPoll(ok ? POLL_MS : nextBackoff());
+    }
+
+    function refreshAfterAction() {
+      resetBackoff();
+      if (pollTimer) clearTimeout(pollTimer);
+      return load(true).finally(() => scheduleNextPoll(POLL_MS));
+    }
+
+    function manualRefresh() {
+      refreshAfterAction();
     }
 
     async function validateAuthThenStart() {
@@ -73,8 +107,9 @@
           localStorage.removeItem(LS_USER);
           return hardRedirectToLogin();
         }
-        load(true);
-        setInterval(() => load(false), 30000);
+        await load(true);
+        resetBackoff();
+        scheduleNextPoll(POLL_MS);
       } catch {
         localStorage.removeItem(LS_TOKEN);
         localStorage.removeItem(LS_USER);
@@ -110,7 +145,7 @@
     }
 
     async function load(force=false) {
-      if (!force && isTyping()) return;
+      if (!force && isTyping()) return true;
       const token = getToken();
       if (!token) return hardRedirectToLogin();
 
@@ -123,14 +158,16 @@
         if (!data || !data.ok) {
           if ((data && data.error || "").toLowerCase().includes("expired")) return hardRedirectToLogin();
           setErr((data && data.error) || "Fetch failed");
-          return;
+          return false;
         }
         rows = data.rows || [];
         render();
+        return true;
       } catch (e) {
         const msg = e && e.message ? e.message : String(e);
         if (/unauthorized|expired|missing token/i.test(msg)) return hardRedirectToLogin();
         setErr(msg);
+        return false;
       }
     }
 
@@ -243,6 +280,8 @@
       } catch (e) {
         setErr(e && e.message ? e.message : String(e));
       }
+
+      await refreshAfterAction();
     }
 
     async function ack(key) {
@@ -266,11 +305,11 @@
         });
         const data = await res.json();
         if (!data || !data.ok) setErr((data && data.error) || "ACK failed");
-        await load(true);
       } catch (e) {
         setErr(e && e.message ? e.message : String(e));
-        await load(true);
       }
+
+      await refreshAfterAction();
     }
 
     function escapeHtml(s) {
