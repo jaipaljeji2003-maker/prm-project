@@ -8,7 +8,7 @@
 </head>
 <body>
   <div class="topbar">
-    <button onclick="load(true)">Refresh</button>
+    <button onclick="manualRefresh()">Refresh</button>
     <button onclick="logout()">Logout</button>
 
     <div class="filters" id="zoneControls" style="flex: 1;">
@@ -62,6 +62,33 @@
       hardRedirectToLogin();
     }
 
+    function resetBackoff(){ backoffMs = 0; }
+    function nextBackoff(){
+      backoffMs = backoffMs ? Math.min(backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_START_MS;
+      return backoffMs;
+    }
+
+    function scheduleNextPoll(delay){
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = setTimeout(pollLoop, delay);
+    }
+
+    async function pollLoop(){
+      const ok = await load(false);
+      if (ok) resetBackoff();
+      scheduleNextPoll(ok ? POLL_MS : nextBackoff());
+    }
+
+    function refreshAfterAction(){
+      resetBackoff();
+      if (pollTimer) clearTimeout(pollTimer);
+      return load(true).finally(() => scheduleNextPoll(POLL_MS));
+    }
+
+    function manualRefresh(){
+      refreshAfterAction();
+    }
+
     async function validateAuthThenInit(){
       const token = getToken();
       if (!token) return hardRedirectToLogin();
@@ -77,13 +104,18 @@
           return hardRedirectToLogin();
         }
         await init();
-        setInterval(() => load(false), 30000);
+        resetBackoff();
+        scheduleNextPoll(POLL_MS);
       } catch {
         localStorage.removeItem(LS_TOKEN);
         localStorage.removeItem(LS_USER);
         hardRedirectToLogin();
       }
     }
+
+    const POLL_MS = 10_000;
+    const BACKOFF_START_MS = 2_000;
+    const BACKOFF_MAX_MS = 15_000;
 
     let rows = [];
     let zonesAll = [];
@@ -100,6 +132,9 @@
     const ACK_SUPPRESS_MS = 8000;
 
     let requestSeq = 0;
+
+    let pollTimer = null;
+    let backoffMs = 0;
 
     const urlParams = new URLSearchParams(window.location.search);
     const zoneParam = urlParams.get("zone");
@@ -209,7 +244,7 @@
     }
 
     async function load(force=false) {
-      if (!force && isTyping()) return;
+      if (!force && isTyping()) return true;
 
       const token = getToken();
       if (!token) return hardRedirectToLogin();
@@ -231,14 +266,14 @@
           headers: { "authorization": "Bearer " + token }
         });
         const data = await res.json();
-        if (myReq !== requestSeq) return;
+        if (myReq !== requestSeq) return true;
 
         if (!data || !data.ok) {
           const msg = (data && data.error) || "Fetch failed";
           if (/unauthorized|expired|missing token/i.test(msg)) return hardRedirectToLogin();
           setErr(msg);
           setLoading(false);
-          return;
+          return false;
         }
 
         const incoming = data.rows || [];
@@ -247,13 +282,15 @@
         cache.set(cacheKey_(), { ts: Date.now(), rows: incoming });
         render();
         setLoading(false);
+        return true;
 
       } catch (e) {
-        if (myReq !== requestSeq) return;
+        if (myReq !== requestSeq) return true;
         const msg = (e && e.message) ? e.message : String(e);
         if (/unauthorized|expired|missing token/i.test(msg)) return hardRedirectToLogin();
         setErr(msg);
         setLoading(false);
+        return false;
       }
     }
 
@@ -349,6 +386,8 @@
       } catch (e) {
         setErr(e && e.message ? e.message : String(e));
       }
+
+      await refreshAfterAction();
     }
 
     async function ack(key) {
@@ -376,11 +415,11 @@
         });
         const data = await res.json();
         if (!data || !data.ok) setErr((data && data.error) || "ACK failed");
-        await load(true);
       } catch (e) {
         setErr((e && e.message) ? e.message : String(e));
-        await load(true);
       }
+
+      await refreshAfterAction();
     }
 
     function escapeHtml(s) {
