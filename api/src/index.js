@@ -147,13 +147,24 @@ function toIso(v, tz) {
 
 
 // ---------- Toronto operational window ----------
+// Cache Intl formatter per timezone (creating it repeatedly is expensive)
+const _dtfCache = new Map();
+function _getTzFormatter(tz) {
+  let fmt = _dtfCache.get(tz);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+    });
+    _dtfCache.set(tz, fmt);
+  }
+  return fmt;
+}
+
 function getTzParts(date, tz) {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-    hour12: false,
-  });
+  const fmt = _getTzFormatter(tz);
   const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
   return {
     year: Number(parts.year),
@@ -164,6 +175,7 @@ function getTzParts(date, tz) {
     second: Number(parts.second),
   };
 }
+
 
 // Convert a local date-time in `tz` to a UTC Date using iterative correction (DST-safe).
 function zonedTimeToUtc({ year, month, day, hour, minute, second }, tz) {
@@ -542,14 +554,15 @@ async function dispatchRows(env) {
   const hdr = await getHeaderMap(env);
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
 
+  const tz = env.TIMEZONE || DEFAULT_TZ;
   const win = operationalWindow(env);
-  const out = [];
+
+  const out = []; // store [timeMs, rowObj] so sort is cheap
   for (const r of rows) {
     if (!r || !r.length) continue;
     const t = r[IX.time];
     if (t == null || t === "") continue;
 
-    const tz = env.TIMEZONE || DEFAULT_TZ;
     const dt = parseDbTime(t, tz);
     if (!dt || isNaN(dt.getTime())) continue;
     if (dt < win.start) continue;
@@ -560,7 +573,10 @@ async function dispatchRows(env) {
       key:        String(r[IX.key] || ""),
       type:       String(r[IX.type] || ""),
       flight:     String(r[IX.flight] || ""),
-      timeEst:    toIso(r[IX.time], tz),
+
+      // IMPORTANT: use dt we already parsed (don’t re-parse via toIso)
+      timeEst:    dt.toISOString(),
+
       sched:      toIso(r[IX.sched], tz),
       origin:     String(r[IX.origin] || ""),
       gate:       String(r[IX.gate] || ""),
@@ -584,12 +600,13 @@ async function dispatchRows(env) {
       timeChgAt: toIso(r[IX.timeChgAt], tz),
     };
 
-    out.push(applyPatchesToRowObj(obj));
+    out.push([dt.getTime(), applyPatchesToRowObj(obj)]);
   }
 
-  out.sort((a, b) => new Date(a.timeEst).getTime() - new Date(b.timeEst).getTime());
-  return out;
+  out.sort((a, b) => a[0] - b[0]);
+  return out.map(x => x[1]);
 }
+
 
 function isTrue(v) {
   if (v === true) return true;
