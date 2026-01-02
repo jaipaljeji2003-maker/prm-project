@@ -6,7 +6,7 @@
  *
  * Required env vars:
  *   SPREADSHEET_ID
- *   USERS_SHEET_NAME (default: USERS)
+ *   USERS_SHEET_NAME (default: USERS
  *   DISPATCH_DB_SHEET_NAME (default: Dispatch_DB)
  *   GOOGLE_SERVICE_ACCOUNT_EMAIL
  * Secrets (recommended):
