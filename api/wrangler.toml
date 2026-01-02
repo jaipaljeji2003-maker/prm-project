@@ -1,0 +1,15 @@
+name = "prm-api-worker"
+main = "src/index.js"
+compatibility_date = "2025-12-31"
+
+[vars]
+# Spreadsheet / sheet names
+SPREADSHEET_ID = "1UJ5QdkUP-LDFdacpAnSeQrn0bwCduvfQz78ticX8wbY"
+USERS_SHEET_NAME = "USERS"
+DISPATCH_DB_SHEET_NAME = "Dispatch_DB"
+
+# Optional (defaults below in code)
+TIMEZONE = "America/Toronto"
+
+# Service account email goes here (safe as non-secret)
+GOOGLE_SERVICE_ACCOUNT_EMAIL = "prm-worker@prm-dispatch.iam.gserviceaccount.com"
