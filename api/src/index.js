@@ -1,3 +1,5 @@
+import { syncFidsToDispatchDb } from "./fids_sync.js";
+
 /**
  * PRM Worker API (Google Sheets = single source of truth)
  * - Auth against USERS sheet (username|role|pin)
@@ -32,6 +34,7 @@ const USERS_CACHE_MS = 120_000;
 const ROW_CACHE_MS = 1_000;
 
 const DEFAULT_TZ = "America/Toronto";
+const OPS_DAY_START_HOUR = 4;
 
 const ZONE_ACK_COL = {
   "DISPATCH": "Dispatch_Ack",
@@ -225,25 +228,23 @@ function addDaysLocal(ymd, deltaDays, tz) {
   return { year: p.year, month: p.month, day: p.day };
 }
 
-function getOperationalWindowNow(tz) {
+function formatYmd(ymd) {
+  return `${ymd.year}-${String(ymd.month).padStart(2, "0")}-${String(ymd.day).padStart(2, "0")}`;
+}
+
+function getOperationalWindowForLens(tz, lens) {
   const now = new Date();
   const p = getTzParts(now, tz);
 
-  const before0130 = (p.hour < 1) || (p.hour === 1 && p.minute < 30);
-
   let opDate = { year: p.year, month: p.month, day: p.day };
-  if (before0130) opDate = addDaysLocal(opDate, -1, tz);
+  if (Number(lens) === 2) opDate = addDaysLocal(opDate, 1, tz);
 
-  const opStartUtc = zonedTimeToUtc({ ...opDate, hour: 1, minute: 30, second: 0 }, tz);
-
+  const opStartUtc = zonedTimeToUtc({ ...opDate, hour: OPS_DAY_START_HOUR, minute: 0, second: 0 }, tz);
   const opEndDate = addDaysLocal(opDate, 1, tz);
-  const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: 1, minute: 29, second: 59 }, tz);
+  const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: OPS_DAY_START_HOUR - 1, minute: 59, second: 59 }, tz);
   opEndUtc.setUTCMilliseconds(999);
 
-  const lookbackStart = new Date(now.getTime() - 60 * 60 * 1000);
-  const start = (lookbackStart < opStartUtc) ? opStartUtc : lookbackStart;
-
-  return { start, end: opEndUtc, opStart: opStartUtc, opEnd: opEndUtc };
+  return { startUtc: opStartUtc, endUtc: opEndUtc, opDateYmd: formatYmd(opDate) };
 }
 
 
@@ -555,9 +556,14 @@ async function handleValidate(req, env) {
 }
 
 // ---------- Dispatch / Lead row shaping ----------
-function operationalWindow(env) {
+function parseLens(value, defaultLens = 1) {
+  const n = Number(value);
+  return (n === 2) ? 2 : (n === 1 ? 1 : defaultLens);
+}
+
+function operationalWindow(env, lens) {
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  return getOperationalWindowNow(tz);
+  return getOperationalWindowForLens(tz, lens);
 }
 
 // Indices based on your DB_HEADER order (0-based)
@@ -575,13 +581,13 @@ const IX = {
   alertText: 29,
 };
 
-async function dispatchRowsImpl(env) {
+async function dispatchRowsImpl(env, lens) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  const win = operationalWindow(env);
+  const win = operationalWindow(env, lens);
 
   const out = []; // store [timeMs, rowObj] so sort is cheap
   for (const r of rows) {
@@ -591,7 +597,7 @@ async function dispatchRowsImpl(env) {
 
     const dt = parseDbTime(t, tz);
     if (!dt || isNaN(dt.getTime())) continue;
-    if (dt < win.start) continue;
+    if (dt < win.startUtc || dt > win.endUtc) continue;
 
     const dispatchAcked = ackCol ? isTrue(r[ackCol - 1]) : false;
 
@@ -633,8 +639,8 @@ async function dispatchRowsImpl(env) {
   return out.map(x => x[1]);
 }
 
-async function dispatchRows(env) {
-  return cachedRows("dispatch", () => dispatchRowsImpl(env));
+async function dispatchRows(env, lens) {
+  return cachedRows(`dispatch:lens${lens}`, () => dispatchRowsImpl(env, lens));
 }
 
 
@@ -653,7 +659,7 @@ async function leadRowsImpl(env, params) {
   const hdr = await getHeaderMap(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
-  const win = operationalWindow(env);
+  const win = operationalWindow(env, params.lens);
 
   const ackColName = (zoneWanted !== "ALL")
     ? (ZONE_ACK_COL[String(zoneWanted).toUpperCase()] || null)
@@ -671,7 +677,7 @@ async function leadRowsImpl(env, params) {
 
     const dt = parseDbTime(t, tz);
     if (!dt || isNaN(dt.getTime())) continue;
-    if (dt < win.start) continue;
+    if (dt < win.startUtc || dt > win.endUtc) continue;
 
     const rowType = String(r[IX.type] || "").toUpperCase();
     if (typeFilter !== "ALL" && rowType !== typeFilter) continue;
@@ -730,7 +736,7 @@ function leadCacheKey(params) {
   const zoneWanted = normalizeZone(params.zone || "ALL");
   const typeFilter = String(params.type || "ALL").toUpperCase();
   const q = String(params.q || "").trim().toUpperCase().replace(/\s+/g, "");
-  return `lead:${zoneWanted}|${typeFilter}|${q}`;
+  return `lead:lens${params.lens}|${zoneWanted}|${typeFilter}|${q}`;
 }
 
 async function leadRows(env, params) {
@@ -914,6 +920,19 @@ export default {
         return withCors(json({ ok:true, name:"prm-api-worker", time: new Date().toISOString() }), origin);
       }
 
+      if (path === "/ops/now" && req.method === "GET") {
+        const tz = env.TIMEZONE || DEFAULT_TZ;
+        const parts = getTzParts(new Date(), tz);
+        const bannerSuggestLens2 = parts.hour < OPS_DAY_START_HOUR;
+        return withCors(json({
+          ok: true,
+          tz,
+          nowLocalParts: parts,
+          currentLensDefault: 1,
+          bannerSuggestLens2,
+        }), origin);
+      }
+
       // ---- auth ----
       if (path === "/auth/login" && req.method === "POST") {
         return withCors(await handleLogin(req, env), origin);
@@ -925,7 +944,8 @@ export default {
       // ---- dispatch ----
       if (path === "/dispatch/rows" && req.method === "GET") {
         await requireAuth(req, env, "dispatch");
-        const rows = await dispatchRows(env);
+        const lens = parseLens(url.searchParams.get("lens"), 1);
+        const rows = await dispatchRows(env, lens);
         return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
       }
 
@@ -956,6 +976,7 @@ export default {
           zone: url.searchParams.get("zone") || "TB",
           type: url.searchParams.get("type") || "ALL",
           q: url.searchParams.get("q") || "",
+          lens: parseLens(url.searchParams.get("lens"), 1),
         };
         const rows = await leadRows(env, params);
         return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
@@ -975,11 +996,59 @@ export default {
         return withCors(json(out), origin);
       }
 
+      if (path === "/admin/refresh" && req.method === "POST") {
+        const v = await requireAuth(req, env, "");
+        if (String(v.user.role || "").toLowerCase() !== "mgmt") {
+          return withCors(json({ ok:false, error: "Forbidden" }, { status: 403 }), origin);
+        }
+        const payload = await req.json().catch(() => ({}));
+        const lensReq = String(payload.lens || "both").toLowerCase();
+        const tz = env.TIMEZONE || DEFAULT_TZ;
+        const runLens = async (lens) => {
+          const window = getOperationalWindowForLens(tz, lens);
+          return syncFidsToDispatchDb(env, {
+            lens,
+            window,
+            helpers: { getHeaderMap, getKeyIndex, getDbRows, sheetsBatchUpdate, colToA1, parseDbTime, getTzParts, normalizeZone },
+          });
+        };
+
+        const results = [];
+        if (lensReq === "1" || lensReq === "lens1") results.push(await runLens(1));
+        else if (lensReq === "2" || lensReq === "lens2") results.push(await runLens(2));
+        else {
+          results.push(await runLens(1));
+          results.push(await runLens(2));
+        }
+
+        cachesState.db = { rows: null, ts: 0 };
+        cachesState.idx = { map: null, ts: 0 };
+        return withCors(json({ ok:true, results }), origin);
+      }
+
       return withCors(json({ ok:false, error:"Not found" }, { status: 404 }), origin);
 
     } catch (err) {
       const msg = (err && err.message) ? err.message : String(err);
       return withCors(json({ ok:false, error: msg }, { status: /missing authorization|unauthorized|expired|no access/i.test(msg) ? 401 : 500 }), origin);
     }
+  },
+  async scheduled(event, env, ctx) {
+    const tz = env.TIMEZONE || DEFAULT_TZ;
+    const runLens = async (lens) => {
+      const window = getOperationalWindowForLens(tz, lens);
+      return syncFidsToDispatchDb(env, {
+        lens,
+        window,
+        helpers: { getHeaderMap, getKeyIndex, getDbRows, sheetsBatchUpdate, colToA1, parseDbTime, getTzParts, normalizeZone },
+      });
+    };
+
+    ctx.waitUntil((async () => {
+      await runLens(1);
+      await runLens(2);
+      cachesState.db = { rows: null, ts: 0 };
+      cachesState.idx = { map: null, ts: 0 };
+    })());
   }
 };

@@ -24,6 +24,10 @@
   </div>
 
   <div id="err" class="err"></div>
+  <div id="lensBanner" class="banner hidden">
+    <strong>Next ops day is available (Lens 2).</strong>
+    <button id="lensSwitch" type="button">Switch</button>
+  </div>
 
   <table id="tbl">
     <thead>
@@ -51,6 +55,18 @@
     let filterType = "ALL";
     let typingUntil = 0;
     const saveTimers = new Map();
+
+    const urlParams = new URLSearchParams(window.location.search);
+    let lens = parseLens(urlParams.get("lens"));
+
+    function parseLens(value) { return value === "2" ? "2" : "1"; }
+    function syncLensInUrl() {
+      const url = new URL(window.location.href);
+      url.searchParams.set("lens", lens);
+      window.history.replaceState(null, "", url);
+    }
+
+    syncLensInUrl();
 
     let pollTimer = null;
     let backoffMs = 0;
@@ -107,6 +123,7 @@
           localStorage.removeItem(LS_USER);
           return hardRedirectToLogin();
         }
+        await loadOpsBanner();
         await load(true);
         resetBackoff();
         scheduleNextPoll(POLL_MS);
@@ -151,7 +168,9 @@
 
       setErr("");
       try {
-        const res = await fetch(API_BASE + "/dispatch/rows", {
+        const url = new URL(API_BASE + "/dispatch/rows");
+        url.searchParams.set("lens", lens);
+        const res = await fetch(url.toString(), {
           headers: { "authorization": "Bearer " + token }
         });
         const data = await res.json();
@@ -321,6 +340,25 @@
         .replaceAll("'", "&#39;");
     }
     function escapeAttr(s) { return escapeHtml(s).replaceAll("\n", " "); }
+
+    async function loadOpsBanner() {
+      const banner = document.getElementById("lensBanner");
+      if (!banner) return;
+      try {
+        const res = await fetch(API_BASE + "/ops/now");
+        const data = await res.json();
+        const show = data && data.ok && data.bannerSuggestLens2 && lens === "1";
+        banner.classList.toggle("hidden", !show);
+      } catch {
+        banner.classList.add("hidden");
+      }
+    }
+
+    document.getElementById("lensSwitch").addEventListener("click", () => {
+      lens = "2";
+      syncLensInUrl();
+      refreshAfterAction();
+    });
 
     validateAuthThenStart();
   </script>

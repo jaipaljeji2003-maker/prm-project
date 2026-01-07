@@ -34,6 +34,10 @@
 
   <div class="hint">Edits: Assignment, Pax. Ack clears alerts instantly (does NOT remove flight).</div>
   <div id="err" class="err"></div>
+  <div id="lensBanner" class="banner hidden">
+    <strong>Next ops day is available (Lens 2).</strong>
+    <button id="lensSwitch" type="button">Switch</button>
+  </div>
   <div id="loading" class="loading" style="display:none;">Loading…</div>
 
   <table id="tbl">
@@ -139,6 +143,7 @@
     const urlParams = new URLSearchParams(window.location.search);
     const zoneParam = urlParams.get("zone");
     const lockZone = (urlParams.get("lockZone") === "1");
+    let lens = parseLens(urlParams.get("lens"));
     if (zoneParam) selectedZone = zoneParam;
 
     if (lockZone) {
@@ -148,6 +153,17 @@
 
     function setErr(msg) { document.getElementById("err").textContent = msg || ""; }
     function setLoading(on) { document.getElementById("loading").style.display = on ? "block" : "none"; }
+
+    function parseLens(value) { return value === "2" ? "2" : "1"; }
+    function syncLensInUrl() {
+      const url = new URL(window.location.href);
+      url.searchParams.set("lens", lens);
+      if (zoneParam) url.searchParams.set("zone", zoneParam);
+      if (lockZone) url.searchParams.set("lockZone", "1");
+      window.history.replaceState(null, "", url);
+    }
+
+    syncLensInUrl();
 
     function fmtTimeOnly(dt) {
       if (!dt) return "";
@@ -195,7 +211,7 @@
       if (sel && sel.value !== selectedZone) sel.value = selectedZone;
     }
 
-    function cacheKey_(){ return `${selectedZone}__${filterType}`; }
+    function cacheKey_(){ return `${lens}__${selectedZone}__${filterType}`; }
 
     function applyAckSuppression_(arr) {
       const now = Date.now();
@@ -237,6 +253,7 @@
         syncZonePills_();
         syncZoneDropdown_();
 
+        await loadOpsBanner();
         await load(true);
       } catch (e) {
         setErr(e && e.message ? e.message : String(e));
@@ -261,6 +278,7 @@
         url.searchParams.set("zone", zone);
         url.searchParams.set("type", type);
         url.searchParams.set("q", document.getElementById("q").value || "");
+        url.searchParams.set("lens", lens);
 
         const res = await fetch(url.toString(), {
           headers: { "authorization": "Bearer " + token }
@@ -431,6 +449,26 @@
         .replaceAll("'", "&#39;");
     }
     function escapeAttr(s) { return escapeHtml(s).replaceAll("\n", " "); }
+
+    async function loadOpsBanner() {
+      const banner = document.getElementById("lensBanner");
+      if (!banner) return;
+      try {
+        const res = await fetch(API_BASE + "/ops/now");
+        const data = await res.json();
+        const show = data && data.ok && data.bannerSuggestLens2 && lens === "1";
+        banner.classList.toggle("hidden", !show);
+      } catch {
+        banner.classList.add("hidden");
+      }
+    }
+
+    document.getElementById("lensSwitch").addEventListener("click", () => {
+      lens = "2";
+      syncLensInUrl();
+      cache.clear();
+      refreshAfterAction();
+    });
 
     validateAuthThenInit();
   </script>

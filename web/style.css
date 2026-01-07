@@ -5,6 +5,8 @@ textarea { resize: vertical; min-height: 36px; }
 .hint { color:#666; font-size: 12px; margin-top: 4px; }
 .err { color:#b00020; font-size: 13px; margin-top: 8px; }
 .ok { color:#0a7a2f; font-size: 13px; margin-top: 8px; }
+.banner { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid #f0c36d; background:#fff7e0; border-radius: 8px; margin-top: 10px; }
+.banner strong { font-weight: 700; }
 .topbar { display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; }
 .searchWrap { display:flex; flex-direction:column; gap:4px; min-width: 320px; flex: 1; }
 .filters { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
