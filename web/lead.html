@@ -533,6 +533,21 @@
       if (el.type === "checkbox") return el.checked ? "1" : "";
       return el.value;
     }
+
+    function applyLocalFieldUpdate(key, field, val) {
+      const keyStr = String(key);
+      rows = rows.map(r => (String(r.key) === keyStr ? { ...r, [field]: val } : r));
+
+      const cacheKey = cacheKey_();
+      const hit = cache.get(cacheKey);
+      if (hit && Array.isArray(hit.rows)) {
+        const updatedRows = hit.rows.map(r => (String(r.key) === keyStr ? { ...r, [field]: val } : r));
+        cache.set(cacheKey, { ts: Date.now(), rows: updatedRows });
+      }
+
+      render();
+    }
+
     async function saveField(key, field, val) {
       const token = getToken();
       if (!token) return hardRedirectToLogin();
@@ -540,6 +555,13 @@
       setErr("");
       const payload = { key };
       payload[field] = val;
+      const isWatchlist = field === "watchlist";
+      let prevWatchVal = null;
+      if (isWatchlist) {
+        const existing = rows.find(r => String(r.key) === String(key));
+        prevWatchVal = existing ? (existing.watchlist ?? "") : "";
+        applyLocalFieldUpdate(key, field, val);
+      }
 
       try {
         const res = await fetch(API_BASE + "/lead/update", {
@@ -551,12 +573,26 @@
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        if (!data || !data.ok) setErr((data && data.error) || "Update failed");
+        if (!data || !data.ok) {
+          setErr((data && data.error) || "Update failed");
+          if (isWatchlist) {
+            applyLocalFieldUpdate(key, field, prevWatchVal);
+            await refreshAfterAction();
+          }
+          return;
+        }
       } catch (e) {
         setErr(e && e.message ? e.message : String(e));
+        if (isWatchlist) {
+          applyLocalFieldUpdate(key, field, prevWatchVal);
+          await refreshAfterAction();
+        }
+        return;
       }
 
-      await refreshAfterAction();
+      if (!isWatchlist) {
+        await refreshAfterAction();
+      }
     }
 
     async function ack(key) {
