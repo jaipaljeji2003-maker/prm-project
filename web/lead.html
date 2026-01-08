@@ -57,7 +57,7 @@
         <tr>
           <th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
           <th>WCHR</th><th>WCHC</th><th>Alert</th>
-          <th>Assignment</th><th>Pax</th><th>Watch</th><th>Priority</th><th>Ack</th>
+          <th>Assignment</th><th>Pax</th><th>Ack</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -392,7 +392,7 @@
 
       if (!filtered.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="empty" colspan="13">No flights match the current filters.</td>`;
+        tr.innerHTML = `<td class="empty" colspan="11">No flights match the current filters.</td>`;
         tb.appendChild(tr);
         return;
       }
@@ -419,16 +419,7 @@
           <td class="num">${escapeHtml(r.wchc || "")}</td>
           <td class="alert">${escapeHtml(r.alert || "")}</td>
           <td><input class="cell-input" data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
-          <td><input class="cell-input num" type="number" min="0" step="1" inputmode="numeric" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
-          <td class="center"><input class="toggle" type="checkbox" data-key="${escapeAttr(r.key)}" data-field="watchlist" ${watchChecked ? "checked" : ""} /></td>
-          <td>
-            <select class="cell-input" data-key="${escapeAttr(r.key)}" data-field="priority">
-              <option value="" ${priorityVal === "" ? "selected" : ""}>None</option>
-              <option value="Low" ${priorityVal === "Low" ? "selected" : ""}>Low</option>
-              <option value="Medium" ${priorityVal === "Medium" ? "selected" : ""}>Medium</option>
-              <option value="High" ${priorityVal === "High" ? "selected" : ""}>High</option>
-            </select>
-          </td>
+          <td><input class="cell-input num" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
           <td><button class="quiet" onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
 
@@ -458,8 +449,7 @@
         if (!Number.isNaN(n)) return n > 0;
         return s !== "0";
       };
-      const needsWchr = filtered.filter(r => hasDemand(r.wchr)).length;
-      const carryOff = filtered.filter(r => hasDemand(r.wchc)).length;
+      const needsChair = filtered.filter(r => hasDemand(r.wchr) || hasDemand(r.wchc)).length;
 
       summary.innerHTML = `
         <div class="summaryCard">
@@ -478,14 +468,9 @@
           <div class="summaryMeta">Needs crew or team</div>
         </div>
         <div class="summaryCard">
-          <div class="summaryTitle">WCHR</div>
-          <div class="summaryValue">${needsWchr}</div>
-          <div class="summaryMeta">Requires wheelchair</div>
-        </div>
-        <div class="summaryCard">
-          <div class="summaryTitle">Carry off</div>
-          <div class="summaryValue">${carryOff}</div>
-          <div class="summaryMeta">WCHC count</div>
+          <div class="summaryTitle">Mobility</div>
+          <div class="summaryValue">${needsChair}</div>
+          <div class="summaryMeta">WCHR/WCHC required</div>
         </div>
         <div class="summaryLegend">
           <span class="legendItem gate">Gate change</span>
