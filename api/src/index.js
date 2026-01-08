@@ -257,6 +257,12 @@ function computeOpsWindowToronto(mode = "current", now = new Date()) {
     startISO: start.toISOString(),
     endISO: opEndUtc.toISOString(),
     startMs: start.getTime(),
+  return {
+    start: opStartUtc,
+    end: opEndUtc,
+    startISO: opStartUtc.toISOString(),
+    endISO: opEndUtc.toISOString(),
+    startMs: opStartUtc.getTime(),
     endMs: opEndUtc.getTime(),
   };
 }
