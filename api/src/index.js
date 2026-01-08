@@ -590,6 +590,7 @@ const IX = {
 async function dispatchRowsImpl(env, opsDay) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
+  const watchCol = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"] || null;
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
@@ -665,6 +666,7 @@ async function leadRowsImpl(env, params) {
 
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
+  const watchCol = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"] || null;
 
   const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
   const win = operationalWindow(env, opsDay);
@@ -732,6 +734,8 @@ async function leadRowsImpl(env, params) {
       zoneFrom,
       zoneTo,
     };
+
+    if (watchCol) obj.watchlist = String(r[watchCol - 1] ?? "");
 
     out.push([dt.getTime(), applyPatchesToRowObj(obj)]);
   }
@@ -851,12 +855,19 @@ async function updateLead(env, user, payload) {
     updates.push({ range: `${sheet}!${colToA1(colPax)}${rowNum}`, values: [[payload.pax]] });
   }
 
+  if (payload.watchlist !== undefined) {
+    const colWatch = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"];
+    if (!colWatch) throw new Error("Watchlist column not found in header.");
+    updates.push({ range: `${sheet}!${colToA1(colWatch)}${rowNum}`, values: [[payload.watchlist]] });
+  }
+
   if (!updates.length) return { ok:true };
   await sheetsBatchUpdate(env, updates);
 
   const patch = {};
   if (payload.assignment !== undefined) patch.assignment = String(payload.assignment ?? "");
   if (payload.pax !== undefined) patch.pax = String(payload.pax ?? "");
+  if (payload.watchlist !== undefined) patch.watchlist = String(payload.watchlist ?? "");
   setPatch(key, patch);
 
   return { ok:true };
