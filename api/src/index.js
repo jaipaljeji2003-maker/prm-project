@@ -245,6 +245,18 @@ function computeOpsWindowToronto(mode = "current", now = new Date()) {
   const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: 3, minute: 59, second: 59 }, tz);
   opEndUtc.setUTCMilliseconds(999);
 
+  let start = opStartUtc;
+  if (opsMode === "current") {
+    const lookbackStart = new Date(now.getTime() - 60 * 60 * 1000);
+    if (lookbackStart > start) start = lookbackStart;
+  }
+
+  return {
+    start,
+    end: opEndUtc,
+    startISO: start.toISOString(),
+    endISO: opEndUtc.toISOString(),
+    startMs: start.getTime(),
   return {
     start: opStartUtc,
     end: opEndUtc,
