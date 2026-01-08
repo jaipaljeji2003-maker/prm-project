@@ -225,25 +225,34 @@ function addDaysLocal(ymd, deltaDays, tz) {
   return { year: p.year, month: p.month, day: p.day };
 }
 
-function getOperationalWindowNow(tz) {
-  const now = new Date();
+function normalizeOpsDay(mode) {
+  const v = String(mode || "").trim().toLowerCase();
+  return v === "next" ? "next" : "current";
+}
+
+function computeOpsWindowToronto(mode = "current", now = new Date()) {
+  const tz = DEFAULT_TZ;
   const p = getTzParts(now, tz);
 
-  const before0130 = (p.hour < 1) || (p.hour === 1 && p.minute < 30);
-
   let opDate = { year: p.year, month: p.month, day: p.day };
-  if (before0130) opDate = addDaysLocal(opDate, -1, tz);
+  if (p.hour < 4) opDate = addDaysLocal(opDate, -1, tz);
 
-  const opStartUtc = zonedTimeToUtc({ ...opDate, hour: 1, minute: 30, second: 0 }, tz);
+  const opsMode = normalizeOpsDay(mode);
+  if (opsMode === "next") opDate = addDaysLocal(opDate, 1, tz);
 
+  const opStartUtc = zonedTimeToUtc({ ...opDate, hour: 4, minute: 0, second: 0 }, tz);
   const opEndDate = addDaysLocal(opDate, 1, tz);
-  const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: 1, minute: 29, second: 59 }, tz);
+  const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: 3, minute: 59, second: 59 }, tz);
   opEndUtc.setUTCMilliseconds(999);
 
-  const lookbackStart = new Date(now.getTime() - 60 * 60 * 1000);
-  const start = (lookbackStart < opStartUtc) ? opStartUtc : lookbackStart;
-
-  return { start, end: opEndUtc, opStart: opStartUtc, opEnd: opEndUtc };
+  return {
+    start: opStartUtc,
+    end: opEndUtc,
+    startISO: opStartUtc.toISOString(),
+    endISO: opEndUtc.toISOString(),
+    startMs: opStartUtc.getTime(),
+    endMs: opEndUtc.getTime(),
+  };
 }
 
 
@@ -555,9 +564,8 @@ async function handleValidate(req, env) {
 }
 
 // ---------- Dispatch / Lead row shaping ----------
-function operationalWindow(env) {
-  const tz = env.TIMEZONE || DEFAULT_TZ;
-  return getOperationalWindowNow(tz);
+function operationalWindow(env, opsDay) {
+  return computeOpsWindowToronto(opsDay);
 }
 
 // Indices based on your DB_HEADER order (0-based)
@@ -575,13 +583,13 @@ const IX = {
   alertText: 29,
 };
 
-async function dispatchRowsImpl(env) {
+async function dispatchRowsImpl(env, opsDay) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  const win = operationalWindow(env);
+  const win = operationalWindow(env, opsDay);
 
   const out = []; // store [timeMs, rowObj] so sort is cheap
   for (const r of rows) {
@@ -591,7 +599,7 @@ async function dispatchRowsImpl(env) {
 
     const dt = parseDbTime(t, tz);
     if (!dt || isNaN(dt.getTime())) continue;
-    if (dt < win.start) continue;
+    if (dt < win.start || dt > win.end) continue;
 
     const dispatchAcked = ackCol ? isTrue(r[ackCol - 1]) : false;
 
@@ -633,8 +641,9 @@ async function dispatchRowsImpl(env) {
   return out.map(x => x[1]);
 }
 
-async function dispatchRows(env) {
-  return cachedRows("dispatch", () => dispatchRowsImpl(env));
+async function dispatchRows(env, params) {
+  const opsDay = normalizeOpsDay(params?.opsDay);
+  return cachedRows(`dispatch:${opsDay}`, () => dispatchRowsImpl(env, opsDay));
 }
 
 
@@ -648,12 +657,13 @@ async function leadRowsImpl(env, params) {
   const zoneWanted = normalizeZone(params.zone || "ALL");
   const typeFilter = String(params.type || "ALL").toUpperCase();
   const q = String(params.q || "").trim().toUpperCase().replace(/\s+/g, "");
+  const opsDay = normalizeOpsDay(params.opsDay);
 
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
-  const win = operationalWindow(env);
+  const win = operationalWindow(env, opsDay);
 
   const ackColName = (zoneWanted !== "ALL")
     ? (ZONE_ACK_COL[String(zoneWanted).toUpperCase()] || null)
@@ -671,7 +681,7 @@ async function leadRowsImpl(env, params) {
 
     const dt = parseDbTime(t, tz);
     if (!dt || isNaN(dt.getTime())) continue;
-    if (dt < win.start) continue;
+    if (dt < win.start || dt > win.end) continue;
 
     const rowType = String(r[IX.type] || "").toUpperCase();
     if (typeFilter !== "ALL" && rowType !== typeFilter) continue;
@@ -730,7 +740,8 @@ function leadCacheKey(params) {
   const zoneWanted = normalizeZone(params.zone || "ALL");
   const typeFilter = String(params.type || "ALL").toUpperCase();
   const q = String(params.q || "").trim().toUpperCase().replace(/\s+/g, "");
-  return `lead:${zoneWanted}|${typeFilter}|${q}`;
+  const opsDay = normalizeOpsDay(params.opsDay);
+  return `lead:${zoneWanted}|${typeFilter}|${q}|${opsDay}`;
 }
 
 async function leadRows(env, params) {
@@ -925,7 +936,10 @@ export default {
       // ---- dispatch ----
       if (path === "/dispatch/rows" && req.method === "GET") {
         await requireAuth(req, env, "dispatch");
-        const rows = await dispatchRows(env);
+        const params = {
+          opsDay: url.searchParams.get("opsDay") || "current",
+        };
+        const rows = await dispatchRows(env, params);
         return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
       }
 
@@ -956,6 +970,7 @@ export default {
           zone: url.searchParams.get("zone") || "TB",
           type: url.searchParams.get("type") || "ALL",
           q: url.searchParams.get("q") || "",
+          opsDay: url.searchParams.get("opsDay") || "current",
         };
         const rows = await leadRows(env, params);
         return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);

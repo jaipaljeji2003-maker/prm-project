@@ -26,6 +26,14 @@
       <button class="pill" id="tDEP" onclick="setType('DEP')">DEP</button>
     </div>
 
+    <div class="filters hidden" id="opsDayControl">
+      <span>Ops Day</span>
+      <select id="opsDaySelect">
+        <option value="current">Current</option>
+        <option value="next">Next</option>
+      </select>
+    </div>
+
     <div class="searchWrap">
       <input id="q" placeholder="Search flight (ex: AC123, TS 101)..." oninput="onSearchInput()" />
       <div class="hint">Search matches Flight (spaces ignored). Auto-refresh pauses while typing.</div>
@@ -52,6 +60,7 @@
     const API_BASE = (window.PRM_CONFIG && window.PRM_CONFIG.API_BASE) || "";
     const LS_TOKEN = "PRM_TOKEN";
     const LS_USER  = "PRM_USER";
+    const LS_OPS_DAY = "PRM_OPS_DAY_LEAD";
 
     function getToken(){ return localStorage.getItem(LS_TOKEN) || ""; }
     function hardRedirectToLogin(){ window.location.href = "/"; }
@@ -121,6 +130,8 @@
     let zonesAll = [];
     let filterType = "ALL";
     let selectedZone = "TB";
+    let opsDayMode = "current";
+    let opsDayEnabled = false;
 
     let typingUntil = 0;
     const saveTimers = new Map();
@@ -157,6 +168,54 @@
     }
 
     function normalizeFlightQ(s) { return String(s || "").toUpperCase().replace(/\s+/g, ""); }
+
+    function getTorontoParts(date = new Date()) {
+      const fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Toronto",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+      return {
+        hour: Number(parts.hour),
+        minute: Number(parts.minute),
+        second: Number(parts.second),
+      };
+    }
+
+    function isOpsDayToggleWindow() {
+      const p = getTorontoParts();
+      return p.hour < 4;
+    }
+
+    function initOpsDayControl() {
+      const control = document.getElementById("opsDayControl");
+      const select = document.getElementById("opsDaySelect");
+      if (!control || !select) return;
+
+      opsDayEnabled = isOpsDayToggleWindow();
+      control.classList.toggle("hidden", !opsDayEnabled);
+
+      if (opsDayEnabled) {
+        const stored = localStorage.getItem(LS_OPS_DAY);
+        opsDayMode = (stored === "next" || stored === "current") ? stored : "current";
+        select.value = opsDayMode;
+        select.addEventListener("change", () => {
+          opsDayMode = select.value === "next" ? "next" : "current";
+          localStorage.setItem(LS_OPS_DAY, opsDayMode);
+          cache.clear();
+          useCacheThenFetch_();
+        });
+      } else {
+        opsDayMode = "current";
+        select.value = "current";
+      }
+    }
 
     function isTyping() {
       const tag = (document.activeElement && document.activeElement.tagName) || "";
@@ -195,7 +254,7 @@
       if (sel && sel.value !== selectedZone) sel.value = selectedZone;
     }
 
-    function cacheKey_(){ return `${selectedZone}__${filterType}`; }
+    function cacheKey_(){ return `${selectedZone}__${filterType}__${opsDayMode}`; }
 
     function applyAckSuppression_(arr) {
       const now = Date.now();
@@ -261,6 +320,7 @@
         url.searchParams.set("zone", zone);
         url.searchParams.set("type", type);
         url.searchParams.set("q", document.getElementById("q").value || "");
+        url.searchParams.set("opsDay", opsDayMode);
 
         const res = await fetch(url.toString(), {
           headers: { "authorization": "Bearer " + token }
@@ -432,6 +492,7 @@
     }
     function escapeAttr(s) { return escapeHtml(s).replaceAll("\n", " "); }
 
+    initOpsDayControl();
     validateAuthThenInit();
   </script>
 </body>
