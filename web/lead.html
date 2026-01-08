@@ -44,16 +44,20 @@
   <div id="err" class="err"></div>
   <div id="loading" class="loading" style="display:none;">Loading…</div>
 
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
-        <th>WCHR</th><th>WCHC</th><th>Alert</th>
-        <th>Assignment</th><th>Pax</th><th>Ack</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <div class="summary" id="summary"></div>
+
+  <div class="tableWrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
+          <th>WCHR</th><th>WCHC</th><th>Alert</th>
+          <th>Assignment</th><th>Pax</th><th>Ack</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 
   <script src="/config.js"></script>
   <script>
@@ -366,6 +370,15 @@
         return ftOk && qOk;
       });
 
+      renderSummary(filtered);
+
+      if (!filtered.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td class="empty" colspan="11">No flights match the current filters.</td>`;
+        tb.appendChild(tr);
+        return;
+      }
+
       filtered.forEach(r => {
         const tr = document.createElement("tr");
 
@@ -380,12 +393,12 @@
           <td class="${timeClass}">${escapeHtml(fmtTimeOnly(r.timeEst))}</td>
           <td class="${gateClass}">${escapeHtml(r.gate || "")}</td>
           <td>${escapeHtml(r.zone || "")}</td>
-          <td>${escapeHtml(r.wchr || "")}</td>
-          <td>${escapeHtml(r.wchc || "")}</td>
+          <td class="num">${escapeHtml(r.wchr || "")}</td>
+          <td class="num">${escapeHtml(r.wchc || "")}</td>
           <td class="alert">${escapeHtml(r.alert || "")}</td>
-          <td><input data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
-          <td><input data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
-          <td><button onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
+          <td><input class="cell-input" data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
+          <td><input class="cell-input num" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
+          <td><button class="quiet" onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
 
         tb.appendChild(tr);
@@ -395,6 +408,54 @@
         el.addEventListener("input", onFieldInput);
         el.addEventListener("blur", onFieldBlur);
       });
+    }
+
+    function renderSummary(filtered) {
+      const summary = document.getElementById("summary");
+      if (!summary) return;
+
+      const total = filtered.length;
+      const arr = filtered.filter(r => String(r.type || "").toUpperCase() === "ARR").length;
+      const dep = filtered.filter(r => String(r.type || "").toUpperCase() === "DEP").length;
+      const alerts = filtered.filter(r => String(r.alert || "").trim()).length;
+      const unassigned = filtered.filter(r => !String(r.assignment || "").trim()).length;
+      const hasDemand = val => {
+        const s = String(val || "").trim();
+        if (!s) return false;
+        const n = Number(s);
+        if (!Number.isNaN(n)) return n > 0;
+        return s !== "0";
+      };
+      const needsChair = filtered.filter(r => hasDemand(r.wchr) || hasDemand(r.wchc)).length;
+
+      summary.innerHTML = `
+        <div class="summaryCard">
+          <div class="summaryTitle">Showing</div>
+          <div class="summaryValue">${total}</div>
+          <div class="summaryMeta">${arr} ARR · ${dep} DEP</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">Alerts</div>
+          <div class="summaryValue">${alerts}</div>
+          <div class="summaryMeta">Gate/Time/Zone changes</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">Unassigned</div>
+          <div class="summaryValue">${unassigned}</div>
+          <div class="summaryMeta">Needs crew or team</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">Mobility</div>
+          <div class="summaryValue">${needsChair}</div>
+          <div class="summaryMeta">WCHR/WCHC required</div>
+        </div>
+        <div class="summaryLegend">
+          <span class="legendItem gate">Gate change</span>
+          <span class="legendItem time">Time change</span>
+          <span class="legendItem arr">ARR</span>
+          <span class="legendItem dep">DEP</span>
+        </div>
+      `;
     }
 
     function onFieldInput(e) {
