@@ -55,7 +55,7 @@
     <table id="tbl">
       <thead>
         <tr>
-          <th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
+          <th>Watch</th><th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
           <th>WCHR</th><th>WCHC</th><th>Alert</th>
           <th>Assignment</th><th>Pax</th><th>Ack</th>
         </tr>
@@ -392,12 +392,21 @@
 
       if (!filtered.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="empty" colspan="11">No flights match the current filters.</td>`;
+        tr.innerHTML = `<td class="empty" colspan="12">No flights match the current filters.</td>`;
         tb.appendChild(tr);
         return;
       }
 
-      filtered.forEach(r => {
+      const ordered = filtered
+        .map((r, idx) => ({
+          r,
+          idx,
+          watch: ["1", "true", "yes"].includes(String(r.watchlist || "").toLowerCase()),
+        }))
+        .sort((a, b) => (Number(b.watch) - Number(a.watch)) || (a.idx - b.idx))
+        .map(item => item.r);
+
+      ordered.forEach(r => {
         const tr = document.createElement("tr");
 
         const t = String(r.type || "").toUpperCase();
@@ -407,9 +416,9 @@
 
         const watchRaw = String(r.watchlist || "").toLowerCase();
         const watchChecked = watchRaw === "1" || watchRaw === "true" || watchRaw === "yes";
-        const priorityVal = String(r.priority || "");
 
         tr.innerHTML = `
+          <td class="watchCell"><input class="watch-toggle" type="checkbox" data-key="${escapeAttr(r.key)}" data-field="watchlist" ${watchChecked ? "checked" : ""} /></td>
           <td><div><b>${escapeHtml(r.flight || "")}</b></div><div class="small">${escapeHtml(r.key || "")}</div></td>
           <td class="${typeClass}">${escapeHtml(r.type || "")}</td>
           <td class="${timeClass}">${escapeHtml(fmtTimeOnly(r.timeEst))}</td>
@@ -441,15 +450,14 @@
       const arr = filtered.filter(r => String(r.type || "").toUpperCase() === "ARR").length;
       const dep = filtered.filter(r => String(r.type || "").toUpperCase() === "DEP").length;
       const alerts = filtered.filter(r => String(r.alert || "").trim()).length;
-      const unassigned = filtered.filter(r => !String(r.assignment || "").trim()).length;
-      const hasDemand = val => {
-        const s = String(val || "").trim();
-        if (!s) return false;
-        const n = Number(s);
-        if (!Number.isNaN(n)) return n > 0;
-        return s !== "0";
-      };
-      const needsChair = filtered.filter(r => hasDemand(r.wchr) || hasDemand(r.wchc)).length;
+      const totalWchr = filtered.reduce((acc, r) => {
+        const n = Number(String(r.wchr || "").trim());
+        return acc + (Number.isNaN(n) ? 0 : n);
+      }, 0);
+      const totalWchc = filtered.reduce((acc, r) => {
+        const n = Number(String(r.wchc || "").trim());
+        return acc + (Number.isNaN(n) ? 0 : n);
+      }, 0);
 
       summary.innerHTML = `
         <div class="summaryCard">
@@ -463,14 +471,14 @@
           <div class="summaryMeta">Gate/Time/Zone changes</div>
         </div>
         <div class="summaryCard">
-          <div class="summaryTitle">Unassigned</div>
-          <div class="summaryValue">${unassigned}</div>
-          <div class="summaryMeta">Needs crew or team</div>
+          <div class="summaryTitle">Regular WCHR</div>
+          <div class="summaryValue">${totalWchr}</div>
+          <div class="summaryMeta">Total WCHR needed</div>
         </div>
         <div class="summaryCard">
-          <div class="summaryTitle">Mobility</div>
-          <div class="summaryValue">${needsChair}</div>
-          <div class="summaryMeta">WCHR/WCHC required</div>
+          <div class="summaryTitle">WCHC</div>
+          <div class="summaryValue">${totalWchc}</div>
+          <div class="summaryMeta">Total WCHC needed</div>
         </div>
         <div class="summaryLegend">
           <span class="legendItem gate">Gate change</span>
