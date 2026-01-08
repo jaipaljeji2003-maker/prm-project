@@ -16,7 +16,6 @@
       <button class="pill" id="zGates" onclick="setZone('Gates')">Gates</button>
       <button class="pill" id="zPierA" onclick="setZone('Pier A')">Pier A</button>
       <button class="pill" id="zT1" onclick="setZone('T1')">T1</button>
-      <button class="pill" id="zUnassigned" onclick="setZone('Unassigned')">Unassigned</button>
       <select id="zoneSel" onchange="onZoneDropdownChange()"></select>
     </div>
 
@@ -24,6 +23,12 @@
       <button class="pill active" id="tALL" onclick="setType('ALL')">All</button>
       <button class="pill" id="tARR" onclick="setType('ARR')">ARR</button>
       <button class="pill" id="tDEP" onclick="setType('DEP')">DEP</button>
+    </div>
+
+    <div class="filters">
+      <button class="pill active" id="cALL" onclick="setChangeFilter('ALL')">All changes</button>
+      <button class="pill" id="cGate" onclick="setChangeFilter('GATE')">Gate change</button>
+      <button class="pill" id="cTime" onclick="setChangeFilter('TIME')">Time change</button>
     </div>
 
     <div class="filters hidden" id="opsDayControl">
@@ -44,16 +49,20 @@
   <div id="err" class="err"></div>
   <div id="loading" class="loading" style="display:none;">Loading…</div>
 
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
-        <th>WCHR</th><th>WCHC</th><th>Alert</th>
-        <th>Assignment</th><th>Pax</th><th>Ack</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <div class="summary" id="summary"></div>
+
+  <div class="tableWrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
+          <th>WCHR</th><th>WCHC</th><th>Alert</th>
+          <th>Assignment</th><th>Pax</th><th>Watch</th><th>Priority</th><th>Ack</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 
   <script src="/config.js"></script>
   <script>
@@ -129,6 +138,7 @@
     let rows = [];
     let zonesAll = [];
     let filterType = "ALL";
+    let changeFilter = "ALL";
     let selectedZone = "TB";
     let opsDayMode = "current";
     let opsDayEnabled = false;
@@ -232,6 +242,14 @@
       useCacheThenFetch_();
     }
 
+    function setChangeFilter(v) {
+      changeFilter = v;
+      document.getElementById("cALL").classList.toggle("active", v === "ALL");
+      document.getElementById("cGate").classList.toggle("active", v === "GATE");
+      document.getElementById("cTime").classList.toggle("active", v === "TIME");
+      render();
+    }
+
     function setZone(z) { selectedZone = z; syncZonePills_(); syncZoneDropdown_(); useCacheThenFetch_(); }
 
     function onZoneDropdownChange() {
@@ -243,7 +261,7 @@
     }
 
     function syncZonePills_() {
-      const map = { "TB":"zTB", "Gates":"zGates", "Pier A":"zPierA", "T1":"zT1", "Unassigned":"zUnassigned" };
+      const map = { "TB":"zTB", "Gates":"zGates", "Pier A":"zPierA", "T1":"zT1" };
       Object.keys(map).forEach(k => {
         const el = document.getElementById(map[k]);
         if (el) el.classList.toggle("active", selectedZone === k);
@@ -288,6 +306,7 @@
         });
         const data = await res.json();
         zonesAll = (data && data.zones) ? data.zones : ["TB","Gates","Pier A","T1","Unassigned"];
+        zonesAll = zonesAll.filter(z => z !== "Unassigned");
 
         const sel = document.getElementById("zoneSel");
         sel.innerHTML = zonesAll.map(z => `<option value="${escapeAttr(z)}">${escapeHtml(z)}</option>`).join("");
@@ -363,8 +382,20 @@
       const filtered = rows.filter(r => {
         const ftOk = (filterType === "ALL") || (String(r.type || "").toUpperCase() === filterType);
         const qOk  = !q || normalizeFlightQ(r.flight).includes(q);
-        return ftOk && qOk;
+        const changeOk = (changeFilter === "ALL")
+          || (changeFilter === "GATE" && r.gateChanged)
+          || (changeFilter === "TIME" && r.timeChanged);
+        return ftOk && qOk && changeOk;
       });
+
+      renderSummary(filtered);
+
+      if (!filtered.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td class="empty" colspan="13">No flights match the current filters.</td>`;
+        tb.appendChild(tr);
+        return;
+      }
 
       filtered.forEach(r => {
         const tr = document.createElement("tr");
@@ -374,36 +405,105 @@
         const gateClass = r.gateChanged ? "cell-gatechg" : "";
         const timeClass = r.timeChanged ? "cell-timechg" : "";
 
+        const watchRaw = String(r.watchlist || "").toLowerCase();
+        const watchChecked = watchRaw === "1" || watchRaw === "true" || watchRaw === "yes";
+        const priorityVal = String(r.priority || "");
+
         tr.innerHTML = `
           <td><div><b>${escapeHtml(r.flight || "")}</b></div><div class="small">${escapeHtml(r.key || "")}</div></td>
           <td class="${typeClass}">${escapeHtml(r.type || "")}</td>
           <td class="${timeClass}">${escapeHtml(fmtTimeOnly(r.timeEst))}</td>
           <td class="${gateClass}">${escapeHtml(r.gate || "")}</td>
           <td>${escapeHtml(r.zone || "")}</td>
-          <td>${escapeHtml(r.wchr || "")}</td>
-          <td>${escapeHtml(r.wchc || "")}</td>
+          <td class="num">${escapeHtml(r.wchr || "")}</td>
+          <td class="num">${escapeHtml(r.wchc || "")}</td>
           <td class="alert">${escapeHtml(r.alert || "")}</td>
-          <td><input data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
-          <td><input data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
-          <td><button onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
+          <td><input class="cell-input" data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
+          <td><input class="cell-input num" type="number" min="0" step="1" inputmode="numeric" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
+          <td class="center"><input class="toggle" type="checkbox" data-key="${escapeAttr(r.key)}" data-field="watchlist" ${watchChecked ? "checked" : ""} /></td>
+          <td>
+            <select class="cell-input" data-key="${escapeAttr(r.key)}" data-field="priority">
+              <option value="" ${priorityVal === "" ? "selected" : ""}>None</option>
+              <option value="Low" ${priorityVal === "Low" ? "selected" : ""}>Low</option>
+              <option value="Medium" ${priorityVal === "Medium" ? "selected" : ""}>Medium</option>
+              <option value="High" ${priorityVal === "High" ? "selected" : ""}>High</option>
+            </select>
+          </td>
+          <td><button class="quiet" onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
 
         tb.appendChild(tr);
       });
 
-      tb.querySelectorAll("input").forEach(el => {
+      tb.querySelectorAll("input, select").forEach(el => {
         el.addEventListener("input", onFieldInput);
         el.addEventListener("blur", onFieldBlur);
+        el.addEventListener("change", onFieldChange);
       });
+    }
+
+    function renderSummary(filtered) {
+      const summary = document.getElementById("summary");
+      if (!summary) return;
+
+      const total = filtered.length;
+      const arr = filtered.filter(r => String(r.type || "").toUpperCase() === "ARR").length;
+      const dep = filtered.filter(r => String(r.type || "").toUpperCase() === "DEP").length;
+      const alerts = filtered.filter(r => String(r.alert || "").trim()).length;
+      const unassigned = filtered.filter(r => !String(r.assignment || "").trim()).length;
+      const hasDemand = val => {
+        const s = String(val || "").trim();
+        if (!s) return false;
+        const n = Number(s);
+        if (!Number.isNaN(n)) return n > 0;
+        return s !== "0";
+      };
+      const needsWchr = filtered.filter(r => hasDemand(r.wchr)).length;
+      const carryOff = filtered.filter(r => hasDemand(r.wchc)).length;
+
+      summary.innerHTML = `
+        <div class="summaryCard">
+          <div class="summaryTitle">Showing</div>
+          <div class="summaryValue">${total}</div>
+          <div class="summaryMeta">${arr} ARR · ${dep} DEP</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">Alerts</div>
+          <div class="summaryValue">${alerts}</div>
+          <div class="summaryMeta">Gate/Time/Zone changes</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">Unassigned</div>
+          <div class="summaryValue">${unassigned}</div>
+          <div class="summaryMeta">Needs crew or team</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">WCHR</div>
+          <div class="summaryValue">${needsWchr}</div>
+          <div class="summaryMeta">Requires wheelchair</div>
+        </div>
+        <div class="summaryCard">
+          <div class="summaryTitle">Carry off</div>
+          <div class="summaryValue">${carryOff}</div>
+          <div class="summaryMeta">WCHC count</div>
+        </div>
+        <div class="summaryLegend">
+          <span class="legendItem gate">Gate change</span>
+          <span class="legendItem time">Time change</span>
+          <span class="legendItem arr">ARR</span>
+          <span class="legendItem dep">DEP</span>
+        </div>
+      `;
     }
 
     function onFieldInput(e) {
       typingUntil = Date.now() + 1200;
 
       const el = e.target;
+      if (el.type === "checkbox") return;
       const key = el.getAttribute("data-key");
       const field = el.getAttribute("data-field");
-      const val = el.value;
+      const val = getFieldValue(el);
       if (!key || !field) return;
 
       const timerKey = `${key}__${field}`;
@@ -417,13 +517,29 @@
 
     function onFieldBlur(e) {
       const el = e.target;
+      if (el.type === "checkbox") return;
       const key = el.getAttribute("data-key");
       const field = el.getAttribute("data-field");
-      const val = el.value;
+      const val = getFieldValue(el);
       if (!key || !field) return;
       saveField(key, field, val);
     }
 
+    function onFieldChange(e) {
+      const el = e.target;
+      if (!(el.type === "checkbox" || el.tagName === "SELECT")) return;
+      const key = el.getAttribute("data-key");
+      const field = el.getAttribute("data-field");
+      const val = getFieldValue(el);
+      if (!key || !field) return;
+      saveField(key, field, val);
+    }
+
+    function getFieldValue(el) {
+      if (!el) return "";
+      if (el.type === "checkbox") return el.checked ? "1" : "";
+      return el.value;
+    }
     async function saveField(key, field, val) {
       const token = getToken();
       if (!token) return hardRedirectToLogin();
