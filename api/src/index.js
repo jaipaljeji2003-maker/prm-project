@@ -50,7 +50,12 @@ const _rowInflight = new Map();
 async function cachedRows(key, fn) {
   const now = Date.now();
   const hit = _rowCache.get(key);
-  if (hit && (now - hit.ts) <= ROW_CACHE_MS) return hit.val;
+  if (hit && (now - hit.ts) <= ROW_CACHE_MS) {
+    if (Array.isArray(hit.val)) {
+      return hit.val.map(applyPatchesToRowObj);
+    }
+    return hit.val;
+  }
 
   if (_rowInflight.has(key)) return _rowInflight.get(key);
 
