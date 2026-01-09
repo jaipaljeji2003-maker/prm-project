@@ -1,6 +1,6 @@
 # PRM Operations Portal
 
-This repository pairs a Cloudflare Worker API with a lightweight static frontend for PRM (Passenger Required Mobility) operations. Google Sheets is treated as the system of record, while the Worker provides authenticated JSON endpoints and the static pages poll those endpoints for dispatch and lead workflows.
+This repository pairs a Cloudflare Worker API with a lightweight static frontend for PRM (Passenger with restricted Mobility) operations. Google Sheets is treated as the system of record, while the Worker provides authenticated JSON endpoints and the static pages poll those endpoints for dispatch and lead workflows.
 
 ## Project layout
 
