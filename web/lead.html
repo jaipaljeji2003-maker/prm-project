@@ -554,7 +554,7 @@
 
     function getFieldValue(el) {
       if (!el) return "";
-      if (el.type === "checkbox") return el.checked ? "1" : "";
+      if (el.type === "checkbox") return el.checked;
       return el.value;
     }
 
