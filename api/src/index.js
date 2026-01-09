@@ -843,6 +843,7 @@ async function updateLead(env, user, payload) {
   const hdr = await getHeaderMap(env);
 
   const updates = [];
+  const patch = {};
 
   if (payload.assignment !== undefined) {
     const colAssignment = hdr["Assignment"] || 14;
@@ -853,27 +854,30 @@ async function updateLead(env, user, payload) {
     const colAt = hdr["assignEditedAt"] || null;
     if (colBy) updates.push({ range: `${sheet}!${colToA1(colBy)}${rowNum}`, values: [[user.username || ""]] });
     if (colAt) updates.push({ range: `${sheet}!${colToA1(colAt)}${rowNum}`, values: [[new Date().toISOString()]] });
+    patch.assignment = String(payload.assignment ?? "");
   }
 
   if (payload.pax !== undefined) {
     const colPax = hdr["Pax_Assisted"] || 15;
     updates.push({ range: `${sheet}!${colToA1(colPax)}${rowNum}`, values: [[payload.pax]] });
+    patch.pax = String(payload.pax ?? "");
   }
 
   if (payload.watchlist !== undefined) {
     const colWatch = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"];
     if (!colWatch) throw new Error("Watchlist column not found in header.");
     updates.push({ range: `${sheet}!${colToA1(colWatch)}${rowNum}`, values: [[payload.watchlist]] });
+    patch.watchlist = String(payload.watchlist ?? "");
   }
 
   if (!updates.length) return { ok:true };
-  await sheetsBatchUpdate(env, updates);
-
-  const patch = {};
-  if (payload.assignment !== undefined) patch.assignment = String(payload.assignment ?? "");
-  if (payload.pax !== undefined) patch.pax = String(payload.pax ?? "");
-  if (payload.watchlist !== undefined) patch.watchlist = String(payload.watchlist ?? "");
-  setPatch(key, patch);
+  if (Object.keys(patch).length) setPatch(key, patch);
+  try {
+    await sheetsBatchUpdate(env, updates);
+  } catch (err) {
+    cachesState.patches.delete(key);
+    throw err;
+  }
 
   return { ok:true };
 }
