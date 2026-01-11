@@ -660,7 +660,7 @@ async function dispatchRowsImpl(env, opsDay) {
   const scanCounts = await getScanCounts(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  const win = operationalWindow(env, opsDay);
+  const win = operationalWindow(env, opsDay, { fullDay: true, lookbackMinutes: 0 });
 
   const out = []; // store [timeMs, rowObj] so sort is cheap
   for (const r of rows) {
@@ -834,7 +834,7 @@ async function mgmtRowsImpl(env, opsDay) {
   const scanCounts = await getScanCounts(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  const win = operationalWindow(env, opsDay);
+  const win = operationalWindow(env, opsDay, { fullDay: true, lookbackMinutes: 0 });
 
   const out = [];
   for (const r of rows) {
