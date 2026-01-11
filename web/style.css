@@ -242,6 +242,7 @@ textarea { resize: vertical; min-height: 36px; }
   display: none;
 }
 .details-row td { background: #f8fafc; }
+.details-row.hidden { display: none; }
 .details-grid {
   display:grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -256,6 +257,12 @@ textarea { resize: vertical; min-height: 36px; }
   flex-direction:column;
   gap:16px;
 }
+.focus-tabs {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.focus-panel[hidden] { display: none; }
 .focus-card {
   border: 1px solid var(--border);
   border-radius: 16px;

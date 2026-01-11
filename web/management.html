@@ -92,7 +92,12 @@
     </section>
 
     <section class="focus" id="focus">
-      <div class="focus-card">
+      <div class="focus-tabs" role="tablist" aria-label="Management focus lists">
+        <button class="pill focus-pill active" data-focus="risk" role="tab" aria-selected="true">At-Risk Next 3h</button>
+        <button class="pill focus-pill" data-focus="pastdue" role="tab" aria-selected="false">Past-Due Shortfall</button>
+        <button class="pill focus-pill" data-focus="scanner" role="tab" aria-selected="false">Scanner Focus</button>
+      </div>
+      <div class="focus-card focus-panel active" data-focus-panel="risk" role="tabpanel">
         <div class="focus-head">
           <h3>At-Risk Next 3h (Unassigned)</h3>
           <p>Sorted by risk score then soonest time.</p>
@@ -114,7 +119,7 @@
           <tbody></tbody>
         </table>
       </div>
-      <div class="focus-card">
+      <div class="focus-card focus-panel" data-focus-panel="pastdue" role="tabpanel" hidden>
         <div class="focus-head">
           <h3>Past-Due Scan Shortfall</h3>
           <p>Sorted by WCHC then shortfall.</p>
@@ -137,7 +142,7 @@
           <tbody></tbody>
         </table>
       </div>
-      <div class="focus-card">
+      <div class="focus-card focus-panel" data-focus-panel="scanner" role="tabpanel" hidden>
         <div class="focus-head">
           <h3>Last Scanner + Leaderboard</h3>
           <p>Flight-level last scan + scanner performance.</p>
@@ -203,6 +208,7 @@
     let problemOnly = false;
     let densityMode = "comfortable";
     let voidScansCount = null;
+    let focusTab = "risk";
 
     function getTorontoParts(date = new Date()) {
       const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -652,7 +658,12 @@
         ${metricTile("0-Scan Flights (Past Due)", zeroScan, "Flights past due with zero scans.")}
         ${metricTile("Unassigned Next 3h (Risk Score)", riskScore, "(WCHC×2 + WCHR) for at-risk flights.")}
         ${metricTile("Gate Changes Today", gateChanges, "Alerted gate changes.")}
-        ${metricTile("Unacked > 5 min", unackedCount === null ? "—" : unackedCount, ackSupported ? "Changes awaiting ack > 5 min." : "ACK data not available yet.")}
+        ${metricTile(
+          "Unacked > 5 min",
+          unackedCount === null ? "—" : unackedCount,
+          ackSupported ? "Changes awaiting ack > 5 min." : "ACK data not available yet.",
+          ackSupported ? "" : "ACK data not available yet."
+        )}
       `;
 
       readinessGrid.innerHTML = `
@@ -716,9 +727,10 @@
       return false;
     }
 
-    function metricTile(label, value, meta) {
+    function metricTile(label, value, meta, title) {
+      const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
       return `
-        <div class="metric-tile">
+        <div class="metric-tile"${titleAttr}>
           <div class="metric-label">${escapeHtml(label)}</div>
           <div class="metric-value">${escapeHtml(value)}</div>
           <div class="metric-meta">${escapeHtml(meta)}</div>
@@ -896,6 +908,14 @@
         });
       });
 
+      document.querySelectorAll(".focus-pill").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const tab = btn.dataset.focus;
+          if (!tab) return;
+          setFocusTab(tab);
+        });
+      });
+
       const table = document.getElementById("tbl");
       if (table) {
         table.addEventListener("click", (e) => {
@@ -914,6 +934,20 @@
       window.addEventListener("resize", updateStickyOffset);
     }
 
+    function setFocusTab(tab) {
+      focusTab = tab;
+      document.querySelectorAll(".focus-pill").forEach(btn => {
+        const isActive = btn.dataset.focus === tab;
+        btn.classList.toggle("active", isActive);
+        btn.setAttribute("aria-selected", String(isActive));
+      });
+      document.querySelectorAll(".focus-panel").forEach(panel => {
+        const isActive = panel.dataset.focusPanel === tab;
+        panel.classList.toggle("active", isActive);
+        panel.toggleAttribute("hidden", !isActive);
+      });
+    }
+
     function updateSortIndicators() {
       document.querySelectorAll(".sort-btn").forEach(btn => {
         const key = btn.dataset.sort;
@@ -925,6 +959,7 @@
     initOpsDayControl();
     bindControls();
     updateSortIndicators();
+    setFocusTab(focusTab);
     validateAuthThenStart();
   </script>
 </body>
