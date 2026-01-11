@@ -267,9 +267,11 @@ function computeOpsWindowToronto(mode = "current", now = new Date(), options = {
   opEndUtc.setUTCMilliseconds(999);
 
   let start = opStartUtc;
-  const fullDay = options?.fullDay === true;
-  if (!fullDay) {
-    const lookbackStart = new Date(now.getTime() - 60 * 60 * 1000);
+  const lookbackMinutes = Number.isFinite(options?.lookbackMinutes)
+    ? Math.max(0, options.lookbackMinutes)
+    : (options?.fullDay ? 0 : 60);
+  if (lookbackMinutes > 0) {
+    const lookbackStart = new Date(now.getTime() - lookbackMinutes * 60 * 1000);
     if (lookbackStart > start) start = lookbackStart;
   }
 
@@ -658,7 +660,7 @@ async function dispatchRowsImpl(env, opsDay) {
   const scanCounts = await getScanCounts(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  const win = operationalWindow(env, opsDay, { fullDay: true });
+  const win = operationalWindow(env, opsDay, { fullDay: true, lookbackMinutes: 0 });
 
   const out = []; // store [timeMs, rowObj] so sort is cheap
   for (const r of rows) {
@@ -832,7 +834,7 @@ async function mgmtRowsImpl(env, opsDay) {
   const scanCounts = await getScanCounts(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
-  const win = operationalWindow(env, opsDay, { fullDay: true });
+  const win = operationalWindow(env, opsDay, { fullDay: true, lookbackMinutes: 0 });
 
   const out = [];
   for (const r of rows) {
