@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PRM Dispatch</title>
+  <title>PRM Management</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -39,7 +39,7 @@
         <th>Flight</th><th>Type</th><th>Time (Est)</th><th>Time Δ</th><th>Sched</th>
         <th>Origin/Dest</th><th>Gate</th><th>Zone</th><th>Alert</th>
         <th>WCHR</th><th>WCHC</th><th>Comment</th>
-        <th>Assignment</th><th>Pax</th><th>PRMGO Scans</th><th>Ack</th>
+        <th>Assignment</th><th>Pax</th><th>PRMGO Scans</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -50,7 +50,7 @@
     const API_BASE = (window.PRM_CONFIG && window.PRM_CONFIG.API_BASE) || "";
     const LS_TOKEN = "PRM_TOKEN";
     const LS_USER  = "PRM_USER";
-    const LS_OPS_DAY = "PRM_OPS_DAY_DISPATCH";
+    const LS_OPS_DAY = "PRM_OPS_DAY_MGMT";
 
     const POLL_MS = 10_000;
     const BACKOFF_START_MS = 2_000;
@@ -59,7 +59,6 @@
     let rows = [];
     let filterType = "ALL";
     let typingUntil = 0;
-    const saveTimers = new Map();
 
     let pollTimer = null;
     let backoffMs = 0;
@@ -156,7 +155,7 @@
       if (!token) return hardRedirectToLogin();
 
       try {
-        const res = await fetch(API_BASE + "/auth/validate?app=dispatch", {
+        const res = await fetch(API_BASE + "/auth/validate?app=mgmt", {
           headers: { "authorization": "Bearer " + token }
         });
         const data = await res.json();
@@ -209,7 +208,7 @@
 
       setErr("");
       try {
-        const url = new URL(API_BASE + "/dispatch/rows");
+        const url = new URL(API_BASE + "/mgmt/rows");
         url.searchParams.set("opsDay", opsDayMode);
 
         const res = await fetch(url.toString(), {
@@ -273,105 +272,16 @@
           <td class="${gateCellClass}">${escapeHtml(r.gate || "")}</td>
           <td>${escapeHtml(r.zone || "")}</td>
           <td class="alert">${escapeHtml(r.alert || "")}</td>
-
-          <td><input data-key="${escapeAttr(r.key)}" data-field="wchr" value="${escapeAttr(r.wchr || "")}" /></td>
-          <td><input data-key="${escapeAttr(r.key)}" data-field="wchc" value="${escapeAttr(r.wchc || "")}" /></td>
-          <td><textarea data-key="${escapeAttr(r.key)}" data-field="comment">${escapeHtml(r.comment || "")}</textarea></td>
-
+          <td class="num">${escapeHtml(r.wchr || "")}</td>
+          <td class="num">${escapeHtml(r.wchc || "")}</td>
+          <td>${escapeHtml(r.comment || "")}</td>
           <td>${escapeHtml(r.assignment || "")}</td>
           <td>${escapeHtml(r.pax || "")}</td>
           <td class="num">${escapeHtml(r.scanCount || "")}</td>
-
-          <td><button onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
 
         tb.appendChild(tr);
       });
-
-      tb.querySelectorAll("input,textarea").forEach(el => {
-        el.addEventListener("input", onFieldInput);
-        el.addEventListener("blur", onFieldBlur);
-      });
-    }
-
-    function onFieldInput(e) {
-      typingUntil = Date.now() + 1200;
-      const el = e.target;
-      const key = el.getAttribute("data-key");
-      const field = el.getAttribute("data-field");
-      const val = el.value;
-      if (!key || !field) return;
-
-      const timerKey = `${key}__${field}`;
-      if (saveTimers.has(timerKey)) clearTimeout(saveTimers.get(timerKey));
-
-      saveTimers.set(timerKey, setTimeout(() => {
-        saveTimers.delete(timerKey);
-        saveField(key, field, val);
-      }, 700));
-    }
-
-    function onFieldBlur(e) {
-      const el = e.target;
-      const key = el.getAttribute("data-key");
-      const field = el.getAttribute("data-field");
-      const val = el.value;
-      if (!key || !field) return;
-      saveField(key, field, val);
-    }
-
-    async function saveField(key, field, val) {
-      const token = getToken();
-      if (!token) return hardRedirectToLogin();
-
-      setErr("");
-      const payload = { key };
-      payload[field] = val;
-
-      try {
-        const res = await fetch(API_BASE + "/dispatch/update", {
-          method: "PATCH",
-          headers: {
-            "content-type": "application/json",
-            "authorization": "Bearer " + token
-          },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (!data || !data.ok) setErr((data && data.error) || "Update failed");
-      } catch (e) {
-        setErr(e && e.message ? e.message : String(e));
-      }
-
-      await refreshAfterAction();
-    }
-
-    async function ack(key) {
-      if (!key) return;
-      const token = getToken();
-      if (!token) return hardRedirectToLogin();
-
-      setErr("");
-      // optimistic UI
-      rows = rows.map(r => (r.key !== key) ? r : ({ ...r, alert:"", gateChanged:false, timeChanged:false, zoneChanged:false }));
-      render();
-
-      try {
-        const res = await fetch(API_BASE + "/dispatch/ack", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "authorization": "Bearer " + token
-          },
-          body: JSON.stringify({ key })
-        });
-        const data = await res.json();
-        if (!data || !data.ok) setErr((data && data.error) || "ACK failed");
-      } catch (e) {
-        setErr(e && e.message ? e.message : String(e));
-      }
-
-      await refreshAfterAction();
     }
 
     function escapeHtml(s) {

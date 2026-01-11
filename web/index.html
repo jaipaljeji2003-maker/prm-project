@@ -223,6 +223,7 @@
         <button id="btn" onclick="login()">Login</button>
         <button onclick="go('dispatch')">Dispatch</button>
         <button onclick="go('lead')">Lead</button>
+        <button onclick="go('mgmt')">Management</button>
       </div>
 
       <div id="msg" class="hint"></div>
@@ -248,7 +249,9 @@
     function go(app){
       const t = getToken();
       if (!t) { setErr("Login first."); return; }
-      const page = (app === "dispatch") ? "/dispatch.html" : "/lead.html";
+      const page = (app === "dispatch") ? "/dispatch.html"
+        : (app === "lead") ? "/lead.html"
+        : "/management.html";
       window.location.href = page;
     }
 
@@ -384,7 +387,7 @@
           window.location.href = "/lead.html";
           return;
         }
-        setOk("Logged in. Choose Dispatch or Lead.");
+        setOk("Logged in. Choose Dispatch, Lead, or Management.");
       } catch (e) {
         document.getElementById('btn').disabled = false;
         setMsg('');
@@ -401,7 +404,7 @@
           headers: { "authorization": "Bearer " + t }
         });
         const data = await res.json();
-        if (data && data.ok) setOk("Session active. Choose Dispatch or Lead.");
+        if (data && data.ok) setOk("Session active. Choose Dispatch, Lead, or Management.");
         else {
           localStorage.removeItem(LS_TOKEN);
           localStorage.removeItem(LS_USER);
