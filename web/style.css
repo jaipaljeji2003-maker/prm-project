@@ -174,9 +174,10 @@ textarea { resize: vertical; min-height: 36px; }
   margin-top: 16px;
   border: 1px solid var(--border);
   border-radius: 16px;
-  overflow: hidden;
+  overflow: auto;
   background: #fff;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  position: relative;
 }
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th,
@@ -190,7 +191,7 @@ textarea { resize: vertical; min-height: 36px; }
 .data-table td:last-child { border-right: none; }
 .data-table thead th {
   position: sticky;
-  top: var(--sticky-top, 72px);
+  top: 0;
   background: #f8fafc;
   z-index: 5;
   text-transform: uppercase;
