@@ -8,7 +8,7 @@
  *   SPREADSHEET_ID
  *   USERS_SHEET_NAME (default: USERS
  *   DISPATCH_DB_SHEET_NAME (default: Dispatch_DB)
- *   SCAN_COUNTS_SHEET_NAME (default: PRm_ScanCounts)
+ *   SCAN_COUNTS_SHEET_NAME (default: PRM_ScanCounts)
  *   GOOGLE_SERVICE_ACCOUNT_EMAIL
  * Secrets (recommended):
  *   GOOGLE_PRIVATE_KEY
@@ -521,7 +521,7 @@ async function getScanCounts(env) {
   const now = Date.now();
   if (cachesState.scans.map && (now - cachesState.scans.ts) < SCAN_CACHE_MS) return cachesState.scans.map;
 
-  const sheet = env.SCAN_COUNTS_SHEET_NAME || "PRm_ScanCounts";
+  const sheet = env.SCAN_COUNTS_SHEET_NAME || "PRM_ScanCounts";
   const values = await sheetsGetValues(env, `${sheet}!A2:B`);
   const map = new Map();
   for (const row of values) {
