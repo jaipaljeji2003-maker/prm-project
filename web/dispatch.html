@@ -39,7 +39,7 @@
         <th>Flight</th><th>Type</th><th>Time (Est)</th><th>Time Δ</th><th>Sched</th>
         <th>Origin/Dest</th><th>Gate</th><th>Zone</th><th>Alert</th>
         <th>WCHR</th><th>WCHC</th><th>Comment</th>
-        <th>Assignment</th><th>Pax</th><th>PRMGO Scans</th><th>Ack</th>
+        <th>Assignment</th><th>Pax</th><th>Ack</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -280,7 +280,6 @@
 
           <td>${escapeHtml(r.assignment || "")}</td>
           <td>${escapeHtml(r.pax || "")}</td>
-          <td class="num">${escapeHtml(r.scanCount || "")}</td>
 
           <td><button onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
