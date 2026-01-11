@@ -6,44 +6,182 @@
   <title>PRM Management</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
-<body>
-  <div class="topbar">
-    <button onclick="manualRefresh()">Refresh</button>
-    <button onclick="logout()">Logout</button>
+<body class="management">
+  <header class="topbar" id="topbar">
+    <div class="topbar-row">
+      <div class="topbar-actions">
+        <button onclick="manualRefresh()">Refresh</button>
+        <button onclick="logout()">Logout</button>
+      </div>
 
-    <div class="searchWrap">
-      <input id="q" placeholder="Search flight (ex: AC123, TS 101)..." oninput="onSearchInput()" />
-      <div class="hint">Search matches Flight (spaces ignored). Auto-refresh pauses while typing.</div>
+      <div class="searchWrap">
+        <input id="q" placeholder="Search flight (ex: AC123, TS 101)..." oninput="onSearchInput()" />
+        <div class="hint">Search matches Flight (spaces ignored). Auto-refresh pauses while typing.</div>
+      </div>
+
+      <div class="filters">
+        <button class="pill active" id="fAll" onclick="setFilter('ALL')">All</button>
+        <button class="pill" id="fARR" onclick="setFilter('ARR')">ARR</button>
+        <button class="pill" id="fDEP" onclick="setFilter('DEP')">DEP</button>
+      </div>
+
+      <div class="controls">
+        <label class="toggle">
+          <input type="checkbox" id="problemOnly" />
+          <span>Problem Only</span>
+        </label>
+        <div class="segmented">
+          <button class="seg-btn active" data-density="comfortable" type="button">Comfortable</button>
+          <button class="seg-btn" data-density="compact" type="button">Compact</button>
+        </div>
+      </div>
+
+      <div class="filters hidden" id="opsDayControl">
+        <span>Ops Day</span>
+        <select id="opsDaySelect">
+          <option value="current">Current</option>
+          <option value="next">Next</option>
+        </select>
+      </div>
     </div>
+  </header>
 
-    <div class="filters">
-      <button class="pill active" id="fAll" onclick="setFilter('ALL')">All</button>
-      <button class="pill" id="fARR" onclick="setFilter('ARR')">ARR</button>
-      <button class="pill" id="fDEP" onclick="setFilter('DEP')">DEP</button>
-    </div>
+  <main class="page">
+    <div id="err" class="err"></div>
 
-    <div class="filters hidden" id="opsDayControl">
-      <span>Ops Day</span>
-      <select id="opsDaySelect">
-        <option value="current">Current</option>
-        <option value="next">Next</option>
-      </select>
-    </div>
-  </div>
+    <section class="metrics" id="metrics">
+      <div class="metrics-head">
+        <div>
+          <h2>Management Overview</h2>
+          <p class="metrics-subtitle">Live operational readiness based on the current dataset.</p>
+        </div>
+        <div class="metrics-badges">
+          <span class="badge badge-muted" id="voidScansBadge" title="Void scans count not available.">Void Scans: —</span>
+        </div>
+      </div>
+      <div class="metrics-grid" id="metricsGrid"></div>
+      <div class="readiness-grid" id="readinessGrid"></div>
+    </section>
 
-  <div id="err" class="err"></div>
+    <section class="tableWrap">
+      <table id="tbl" class="data-table">
+        <thead>
+          <tr>
+            <th class="col-expander"></th>
+            <th>Flight</th>
+            <th>Type</th>
+            <th><button class="sort-btn" data-sort="timeEst">Time (Est)</button></th>
+            <th class="col-optional"><button class="sort-btn" data-sort="timeDelta">Time Δ</button></th>
+            <th class="col-optional">Sched</th>
+            <th class="col-optional">Origin/Dest</th>
+            <th>Gate</th>
+            <th>Zone</th>
+            <th>Status</th>
+            <th class="col-optional">Alert</th>
+            <th class="num"><button class="sort-btn" data-sort="wchr">WCHR</button></th>
+            <th class="num"><button class="sort-btn" data-sort="wchc">WCHC</button></th>
+            <th class="col-optional">Comment</th>
+            <th>Assignment</th>
+            <th class="col-optional num">Pax</th>
+            <th class="num"><button class="sort-btn" data-sort="scans">PRMGO Scans</button></th>
+            <th class="col-optional">Last Scanner</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
 
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th>Flight</th><th>Type</th><th>Time (Est)</th><th>Time Δ</th><th>Sched</th>
-        <th>Origin/Dest</th><th>Gate</th><th>Zone</th><th>Alert</th>
-        <th>WCHR</th><th>WCHC</th><th>Comment</th>
-        <th>Assignment</th><th>Pax</th><th>PRMGO Scans</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+    <section class="focus" id="focus">
+      <div class="focus-tabs" role="tablist" aria-label="Management focus lists">
+        <button class="pill focus-pill active" data-focus="risk" role="tab" aria-selected="true">At-Risk Next 3h</button>
+        <button class="pill focus-pill" data-focus="pastdue" role="tab" aria-selected="false">Past-Due Shortfall</button>
+        <button class="pill focus-pill" data-focus="scanner" role="tab" aria-selected="false">Scanner Focus</button>
+      </div>
+      <div class="focus-card focus-panel active" data-focus-panel="risk" role="tabpanel">
+        <div class="focus-head">
+          <h3>At-Risk Next 3h (Unassigned)</h3>
+          <p>Sorted by risk score then soonest time.</p>
+        </div>
+        <table class="focus-table" id="atRiskTable">
+          <thead>
+            <tr>
+              <th>Flight</th>
+              <th>Type</th>
+              <th>Time (Est)</th>
+              <th>Gate</th>
+              <th>Zone</th>
+              <th class="num">WCHR</th>
+              <th class="num">WCHC</th>
+              <th>Assignment</th>
+              <th class="num">Scans</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="focus-card focus-panel" data-focus-panel="pastdue" role="tabpanel" hidden>
+        <div class="focus-head">
+          <h3>Past-Due Scan Shortfall</h3>
+          <p>Sorted by WCHC then shortfall.</p>
+        </div>
+        <table class="focus-table" id="pastDueTable">
+          <thead>
+            <tr>
+              <th>Flight</th>
+              <th>Type</th>
+              <th>Time (Est)</th>
+              <th>Due Time</th>
+              <th>Gate</th>
+              <th>Zone</th>
+              <th class="num">Scans</th>
+              <th class="num">Prealert</th>
+              <th class="num">Shortfall</th>
+              <th>Assignment</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="focus-card focus-panel" data-focus-panel="scanner" role="tabpanel" hidden>
+        <div class="focus-head">
+          <h3>Last Scanner + Leaderboard</h3>
+          <p>Flight-level last scan + scanner performance.</p>
+        </div>
+        <div class="focus-split">
+          <div>
+            <h4>Last Scanner per Flight</h4>
+            <table class="focus-table" id="scannerTable">
+              <thead>
+                <tr>
+                  <th>Flight</th>
+                  <th>Type</th>
+                  <th>Time (Est)</th>
+                  <th>Last Scanner</th>
+                  <th>Last Scan Time</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div>
+            <h4>Leaderboard</h4>
+            <table class="focus-table" id="leaderboardTable">
+              <thead>
+                <tr>
+                  <th>Scanner</th>
+                  <th class="num">Flights Touched</th>
+                  <th class="num">Total Scans</th>
+                  <th class="num">Past-Due Flights</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="empty" id="scannerEmpty" hidden>Scanner data not available.</div>
+      </div>
+    </section>
+  </main>
 
   <script src="/config.js"></script>
   <script>
@@ -64,6 +202,13 @@
     let backoffMs = 0;
     let opsDayMode = "current";
     let opsDayEnabled = false;
+
+    let sortKey = "timeEst";
+    let sortDir = "asc";
+    let problemOnly = false;
+    let densityMode = "comfortable";
+    let voidScansCount = null;
+    let focusTab = "risk";
 
     function getTorontoParts(date = new Date()) {
       const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -183,6 +328,13 @@
       return hh + ":" + mm;
     }
 
+    function fmtDateTime(v) {
+      if (!v) return "";
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${fmtTime(d)}`;
+    }
+
     function pickPrev(r){ return (r.timePrev || ""); }
     function pickDelta(r){ return (r.timeDelta || ""); }
 
@@ -199,6 +351,69 @@
     function isTyping() {
       const tag = (document.activeElement && document.activeElement.tagName) || "";
       return Date.now() < typingUntil || tag === "INPUT" || tag === "TEXTAREA";
+    }
+
+    function toNumber(v) {
+      const n = Number(String(v || "").trim());
+      return Number.isNaN(n) ? 0 : n;
+    }
+
+    function getTimeMs(v) {
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d.getTime();
+    }
+
+    function getPrealertTotal(r) {
+      return toNumber(r.wchr) + toNumber(r.wchc);
+    }
+
+    function getScanCount(r) {
+      return toNumber(r.scanCount);
+    }
+
+    function getGateChange(r) {
+      const alertText = String(r.alert || "");
+      return Boolean(r.gateChanged) || /gate\s*:/i.test(alertText);
+    }
+
+    function getTimeChange(r) {
+      return Boolean(r.timeChanged) || Boolean(String(r.timeDelta || "").trim());
+    }
+
+    function getScanDueTimeMs(r) {
+      const base = getTimeMs(r.timeEst);
+      if (base === null) return null;
+      const type = String(r.type || "").toUpperCase();
+      const extra = type === "ARR" ? 120 * 60 * 1000 : 0;
+      return base + extra;
+    }
+
+    function getRowMeta(r, nowMs, ackSupported) {
+      const prealert = getPrealertTotal(r);
+      const scans = getScanCount(r);
+      const timeMs = getTimeMs(r.timeEst);
+      const dueMs = getScanDueTimeMs(r);
+      const pastDue = dueMs !== null && nowMs > dueMs;
+      const shortfall = pastDue ? Math.max(0, prealert - scans) : 0;
+      const next3h = timeMs !== null && timeMs >= nowMs && timeMs <= nowMs + (3 * 60 * 60 * 1000);
+      const unassigned = !String(r.assignment || "").trim();
+      const atRisk = prealert > 0 && next3h && unassigned;
+      const riskScore = atRisk ? (toNumber(r.wchc) * 2 + toNumber(r.wchr)) : 0;
+      const changeAt = getTimeMs(r.timeChgAt || r.alertAt || r.changeAt);
+      const unacked = Boolean(ackSupported && changeAt && !isAcked(r) && (nowMs - changeAt > 5 * 60 * 1000));
+      return {
+        prealert,
+        scans,
+        timeMs,
+        dueMs,
+        pastDue,
+        shortfall,
+        atRisk,
+        riskScore,
+        unacked,
+        hasGateChange: getGateChange(r),
+        hasTimeChange: getTimeChange(r),
+      };
     }
 
     async function load(force=false) {
@@ -221,6 +436,7 @@
           return false;
         }
         rows = data.rows || [];
+        voidScansCount = data.voidScans ?? data.voidScanCount ?? null;
         render();
         return true;
       } catch (e) {
@@ -232,13 +448,14 @@
     }
 
     function render() {
+      updateStickyOffset();
       const tb = document.querySelector("#tbl tbody");
       tb.innerHTML = "";
 
       const qRaw = (document.getElementById("q").value || "").trim().toUpperCase();
       const qNorm = qRaw.replace(/\s+/g, "");
 
-      const filtered = rows.filter(r => {
+      const baseFiltered = rows.filter(r => {
         const rt = String(r.type || "").toUpperCase();
         const ftOk = (filterType === "ALL") || (rt === filterType);
         const flightNorm = String(r.flight || "").toUpperCase().replace(/\s+/g, "");
@@ -246,14 +463,43 @@
         return ftOk && qOk;
       });
 
-      filtered.forEach(r => {
+      const nowMs = Date.now();
+      const ackSupported = baseFiltered.some(r =>
+        r.ackAt || r.ackedAt || r.dispatchAck !== undefined || r.alertAcked !== undefined || r.ack !== undefined
+      );
+      const metaRows = baseFiltered.map(r => ({ r, meta: getRowMeta(r, nowMs, ackSupported) }));
+
+      const visibleRows = problemOnly
+        ? metaRows.filter(({ meta }) => meta.atRisk || meta.shortfall > 0 || meta.unacked)
+        : metaRows;
+
+      renderMetrics(metaRows, nowMs, ackSupported);
+      renderFocusLists(metaRows, nowMs);
+
+      if (!visibleRows.length) {
         const tr = document.createElement("tr");
+        tr.innerHTML = `<td class="empty" colspan="18">No flights match the current filters.</td>`;
+        tb.appendChild(tr);
+        return;
+      }
 
+      const ordered = visibleRows
+        .sort((a, b) => sortRows(a, b))
+        .map(item => item);
+
+      const rowsHtml = ordered.map(({ r, meta }, idx) => {
         const rt = String(r.type || "").toUpperCase();
-        const typeClass = (rt === "ARR") ? "type-arr" : (rt === "DEP") ? "type-dep" : "";
+        const typeClass = (rt === "ARR") ? "badge badge-arr" : (rt === "DEP") ? "badge badge-dep" : "badge";
 
-        const gateCellClass = r.gateChanged ? "cell-gate-changed" : "";
-        const timeCellClass = r.timeChanged ? "cell-time-changed" : "";
+        const gateBadge = r.gate ? `<span class="badge badge-gate">${escapeHtml(r.gate)}</span>` : "<span class=\"muted\">—</span>";
+        const zoneBadge = r.zone ? `<span class="badge badge-zone">${escapeHtml(r.zone)}</span>` : "<span class=\"muted\">—</span>";
+
+        const gateChangeChip = meta.hasGateChange ? `<span class="badge badge-gate-change">Gate Change</span>` : "";
+        const timeChangeChip = meta.hasTimeChange ? `<span class="badge badge-time-change">Time Change</span>` : "";
+        const riskChip = meta.atRisk ? `<span class="badge badge-risk">At Risk</span>` : "";
+        const pastDueChip = meta.shortfall > 0 ? `<span class="badge badge-pastdue">Past Due</span>` : "";
+
+        const statusChips = [riskChip, pastDueChip, gateChangeChip, timeChangeChip].filter(Boolean).join(" ");
 
         const prev = pickPrev(r);
         const delta = pickDelta(r);
@@ -262,26 +508,358 @@
           ? `<div class="small">Prev: ${escapeHtml(fmtTime(prev))}${String(delta).length ? ` | Δ ${escapeHtml(delta)}m` : ""}</div>`
           : "";
 
-        tr.innerHTML = `
-          <td><div><b>${escapeHtml(r.flight || "")}</b></div><div class="small">${escapeHtml(r.key || "")}</div></td>
-          <td class="${typeClass}">${escapeHtml(r.type || "")}</td>
-          <td class="${timeCellClass}">${escapeHtml(fmtTime(r.timeEst))}${timePrevLine}</td>
-          <td class="${timeCellClass}">${r.timeChanged ? escapeHtml(delta || "") : ""}</td>
-          <td>${escapeHtml(fmtTime(r.sched))}</td>
-          <td>${escapeHtml(r.origin || "")}</td>
-          <td class="${gateCellClass}">${escapeHtml(r.gate || "")}</td>
-          <td>${escapeHtml(r.zone || "")}</td>
-          <td class="alert">${escapeHtml(r.alert || "")}</td>
-          <td class="num">${escapeHtml(r.wchr || "")}</td>
-          <td class="num">${escapeHtml(r.wchc || "")}</td>
-          <td>${escapeHtml(r.comment || "")}</td>
-          <td>${escapeHtml(r.assignment || "")}</td>
-          <td>${escapeHtml(r.pax || "")}</td>
-          <td class="num">${escapeHtml(r.scanCount || "")}</td>
+        const scanDisplay = meta.pastDue && meta.prealert > 0
+          ? `${meta.scans} / ${meta.prealert}`
+          : `${meta.scans || ""}`;
+        const scanTitle = meta.shortfall > 0
+          ? `Shortfall: ${meta.shortfall}`
+          : "";
+
+        const rowClasses = [
+          meta.atRisk ? "row-at-risk" : "",
+          meta.shortfall > 0 ? "row-past-due" : "",
+        ].join(" ").trim();
+
+        const detailsHtml = `
+          <div class="details-grid">
+            <div>
+              <div class="details-label">Sched</div>
+              <div>${escapeHtml(fmtTime(r.sched)) || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Origin/Dest</div>
+              <div>${escapeHtml(r.origin || "") || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Alert</div>
+              <div>${escapeHtml(r.alert || "") || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Comment</div>
+              <div>${escapeHtml(r.comment || "") || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Pax</div>
+              <div>${escapeHtml(r.pax || "") || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Last Scanner</div>
+              <div>${escapeHtml(r.lastScannerName || "") || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Last Scan Time</div>
+              <div>${escapeHtml(fmtDateTime(r.lastScanTime)) || "—"}</div>
+            </div>
+            <div>
+              <div class="details-label">Scan Due</div>
+              <div>${meta.dueMs ? fmtTime(new Date(meta.dueMs)) : "—"}</div>
+            </div>
+          </div>
         `;
 
-        tb.appendChild(tr);
+        return `
+          <tr class="${rowClasses}" data-row-id="${idx}">
+            <td class="col-expander">
+              <button class="row-expander" data-row-id="${idx}" aria-expanded="false" title="Show details">▸</button>
+            </td>
+            <td><div class="flight-cell"><b>${escapeHtml(r.flight || "")}</b><div class="small">${escapeHtml(r.key || "")}</div></div></td>
+            <td><span class="${typeClass}">${escapeHtml(r.type || "")}</span></td>
+            <td>${escapeHtml(fmtTime(r.timeEst))}${timePrevLine}</td>
+            <td class="col-optional">${r.timeChanged ? escapeHtml(delta || "") : ""}</td>
+            <td class="col-optional">${escapeHtml(fmtTime(r.sched))}</td>
+            <td class="col-optional">${escapeHtml(r.origin || "")}</td>
+            <td>${gateBadge}</td>
+            <td>${zoneBadge}</td>
+            <td>${statusChips || "<span class=\"muted\">—</span>"}</td>
+            <td class="col-optional">${escapeHtml(r.alert || "")}</td>
+            <td class="num">${escapeHtml(r.wchr || "")}</td>
+            <td class="num">${escapeHtml(r.wchc || "")}</td>
+            <td class="col-optional">${escapeHtml(r.comment || "")}</td>
+            <td>${escapeHtml(r.assignment || "") || "—"}</td>
+            <td class="col-optional num">${escapeHtml(r.pax || "")}</td>
+            <td class="num" title="${escapeAttr(scanTitle)}">${escapeHtml(scanDisplay)}</td>
+            <td class="col-optional">${escapeHtml(r.lastScannerName || "")}</td>
+          </tr>
+          <tr class="details-row hidden" data-detail-for="${idx}">
+            <td colspan="18">${detailsHtml}</td>
+          </tr>
+        `;
+      }).join("");
+
+      tb.innerHTML = rowsHtml;
+    }
+
+    function sortRows(a, b) {
+      const dir = sortDir === "asc" ? 1 : -1;
+      const aVal = getSortValue(a.r, a.meta);
+      const bVal = getSortValue(b.r, b.meta);
+      if (aVal === bVal) return 0;
+      if (aVal === null || aVal === undefined) return 1;
+      if (bVal === null || bVal === undefined) return -1;
+      return (aVal > bVal ? 1 : -1) * dir;
+    }
+
+    function getSortValue(r, meta) {
+      switch (sortKey) {
+        case "timeDelta":
+          return toNumber(r.timeDelta);
+        case "wchc":
+          return toNumber(r.wchc);
+        case "wchr":
+          return toNumber(r.wchr);
+        case "scans":
+          return meta.scans;
+        case "timeEst":
+        default:
+          return meta.timeMs ?? 0;
+      }
+    }
+
+    function renderMetrics(metaRows, nowMs, ackSupported) {
+      const metricGrid = document.getElementById("metricsGrid");
+      const readinessGrid = document.getElementById("readinessGrid");
+      if (!metricGrid || !readinessGrid) return;
+
+      let totalWchr = 0;
+      let totalWchc = 0;
+      let totalScans = 0;
+      let scanShortfall = 0;
+      let zeroScan = 0;
+      let riskScore = 0;
+      let gateChanges = 0;
+
+      const latencies = [];
+      const scanners = new Set();
+
+      metaRows.forEach(({ r, meta }) => {
+        totalWchr += toNumber(r.wchr);
+        totalWchc += toNumber(r.wchc);
+        totalScans += meta.scans;
+        scanShortfall += meta.shortfall;
+        if (meta.pastDue && meta.prealert > 0 && meta.scans === 0) zeroScan += 1;
+        if (meta.atRisk) riskScore += meta.riskScore;
+        if (meta.hasGateChange) gateChanges += 1;
+
+        if (r.lastScanTime && meta.timeMs) {
+          const lastScanMs = getTimeMs(r.lastScanTime);
+          if (lastScanMs !== null) latencies.push(lastScanMs - meta.timeMs);
+        }
+        if (r.lastScannerName) scanners.add(r.lastScannerName);
       });
+
+      const unackedCount = ackSupported ? computeUnacked(metaRows, nowMs) : null;
+
+      const latencyStats = latencies.length ? computeLatencyStats(latencies) : null;
+
+      metricGrid.innerHTML = `
+        ${metricTile("Prealerts", `WCHR ${totalWchr} | WCHC ${totalWchc}`, "Totals across the current dataset.")}
+        ${metricTile("Total Scans", totalScans, "PRMGO scans logged.")}
+        ${metricTile("Scan Shortfall (Past Due)", scanShortfall, "Total missing scans after due time.")}
+        ${metricTile("0-Scan Flights (Past Due)", zeroScan, "Flights past due with zero scans.")}
+        ${metricTile("Unassigned Next 3h (Risk Score)", riskScore, "(WCHC×2 + WCHR) for at-risk flights.")}
+        ${metricTile("Gate Changes Today", gateChanges, "Alerted gate changes.")}
+        ${metricTile(
+          "Unacked > 5 min",
+          unackedCount === null ? "—" : unackedCount,
+          ackSupported ? "Changes awaiting ack > 5 min." : "ACK data not available yet.",
+          ackSupported ? "" : "ACK data not available yet."
+        )}
+      `;
+
+      readinessGrid.innerHTML = `
+        <div class="readiness-card">
+          <div class="readiness-label">Time-to-Scan (Median / P90)</div>
+          <div class="readiness-value">${latencyStats ? `${latencyStats.median}m / ${latencyStats.p90}m` : "—"}</div>
+          <div class="readiness-meta">ARR uses ETA +120, DEP uses ETD.</div>
+        </div>
+        <div class="readiness-card">
+          <div class="readiness-label">Scanner Data Coverage</div>
+          <div class="readiness-value">${scanners.size ? `${scanners.size} scanners` : "—"}</div>
+          <div class="readiness-meta">Last scan metadata ${scanners.size ? "available." : "not available yet."}</div>
+        </div>
+      `;
+
+      const voidBadge = document.getElementById("voidScansBadge");
+      if (voidBadge) {
+        if (voidScansCount === null || voidScansCount === undefined || voidScansCount === "") {
+          voidBadge.textContent = "Void Scans: —";
+          voidBadge.title = "Void scans count not available.";
+        } else {
+          voidBadge.textContent = `Void Scans: ${voidScansCount}`;
+          voidBadge.title = "Unmatched scans not tied to a flight key.";
+        }
+      }
+    }
+
+    function computeLatencyStats(latencies) {
+      const sorted = latencies.slice().sort((a, b) => a - b);
+      const median = percentile(sorted, 0.5);
+      const p90 = percentile(sorted, 0.9);
+      return {
+        median: Math.round(median / 60000),
+        p90: Math.round(p90 / 60000),
+      };
+    }
+
+    function percentile(sorted, p) {
+      if (!sorted.length) return 0;
+      const idx = (sorted.length - 1) * p;
+      const lower = Math.floor(idx);
+      const upper = Math.ceil(idx);
+      if (lower === upper) return sorted[lower];
+      return sorted[lower] + (sorted[upper] - sorted[lower]) * (idx - lower);
+    }
+
+    function computeUnacked(metaRows, nowMs) {
+      return metaRows.reduce((acc, { r }) => {
+        const acked = isAcked(r);
+        if (acked) return acc;
+        const changeAt = getTimeMs(r.timeChgAt || r.alertAt || r.changeAt);
+        if (changeAt === null) return acc;
+        return (nowMs - changeAt > 5 * 60 * 1000) ? acc + 1 : acc;
+      }, 0);
+    }
+
+    function isAcked(r) {
+      if (r.ackAt || r.ackedAt) return true;
+      const val = r.dispatchAck ?? r.alertAcked ?? r.ack;
+      if (val === true || val === "true" || val === 1 || val === "1") return true;
+      return false;
+    }
+
+    function metricTile(label, value, meta, title) {
+      const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
+      return `
+        <div class="metric-tile"${titleAttr}>
+          <div class="metric-label">${escapeHtml(label)}</div>
+          <div class="metric-value">${escapeHtml(value)}</div>
+          <div class="metric-meta">${escapeHtml(meta)}</div>
+        </div>
+      `;
+    }
+
+    function renderFocusLists(metaRows, nowMs) {
+      renderAtRisk(metaRows, nowMs);
+      renderPastDue(metaRows);
+      renderScanner(metaRows);
+    }
+
+    function renderAtRisk(metaRows, nowMs) {
+      const tb = document.querySelector("#atRiskTable tbody");
+      if (!tb) return;
+      const atRisk = metaRows
+        .filter(({ meta }) => meta.atRisk)
+        .sort((a, b) => (b.meta.riskScore - a.meta.riskScore) || (a.meta.timeMs - b.meta.timeMs));
+
+      if (!atRisk.length) {
+        tb.innerHTML = `<tr><td class="empty" colspan="9">No at-risk flights in the next 3 hours.</td></tr>`;
+        return;
+      }
+
+      tb.innerHTML = atRisk.map(({ r, meta }) => `
+        <tr>
+          <td>${escapeHtml(r.flight || "")}</td>
+          <td>${escapeHtml(r.type || "")}</td>
+          <td>${escapeHtml(fmtTime(r.timeEst))}</td>
+          <td>${escapeHtml(r.gate || "")}</td>
+          <td>${escapeHtml(r.zone || "")}</td>
+          <td class="num">${escapeHtml(r.wchr || "")}</td>
+          <td class="num">${escapeHtml(r.wchc || "")}</td>
+          <td>${escapeHtml(r.assignment || "") || "—"}</td>
+          <td class="num">${meta.scans}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderPastDue(metaRows) {
+      const tb = document.querySelector("#pastDueTable tbody");
+      if (!tb) return;
+      const pastDue = metaRows
+        .filter(({ meta }) => meta.shortfall > 0)
+        .sort((a, b) => (toNumber(b.r.wchc) - toNumber(a.r.wchc)) || (b.meta.shortfall - a.meta.shortfall));
+
+      if (!pastDue.length) {
+        tb.innerHTML = `<tr><td class="empty" colspan="10">No past-due shortfalls right now.</td></tr>`;
+        return;
+      }
+
+      tb.innerHTML = pastDue.map(({ r, meta }) => `
+        <tr>
+          <td>${escapeHtml(r.flight || "")}</td>
+          <td>${escapeHtml(r.type || "")}</td>
+          <td>${escapeHtml(fmtTime(r.timeEst))}</td>
+          <td>${meta.dueMs ? escapeHtml(fmtTime(new Date(meta.dueMs))) : "—"}</td>
+          <td>${escapeHtml(r.gate || "")}</td>
+          <td>${escapeHtml(r.zone || "")}</td>
+          <td class="num">${meta.scans}</td>
+          <td class="num">${meta.prealert}</td>
+          <td class="num">${meta.shortfall}</td>
+          <td>${escapeHtml(r.assignment || "") || "—"}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderScanner(metaRows) {
+      const scannerEmpty = document.getElementById("scannerEmpty");
+      const scannerTb = document.querySelector("#scannerTable tbody");
+      const leaderboardTb = document.querySelector("#leaderboardTable tbody");
+      if (!scannerTb || !leaderboardTb || !scannerEmpty) return;
+
+      const scannerRows = metaRows.filter(({ r }) => r.lastScannerName || r.lastScanTime);
+      if (!scannerRows.length) {
+        scannerEmpty.hidden = false;
+        scannerTb.innerHTML = "";
+        leaderboardTb.innerHTML = "";
+        return;
+      }
+
+      scannerEmpty.hidden = true;
+      scannerTb.innerHTML = scannerRows.map(({ r }) => `
+        <tr>
+          <td>${escapeHtml(r.flight || "")}</td>
+          <td>${escapeHtml(r.type || "")}</td>
+          <td>${escapeHtml(fmtTime(r.timeEst))}</td>
+          <td>${escapeHtml(r.lastScannerName || "") || "—"}</td>
+          <td>${escapeHtml(fmtDateTime(r.lastScanTime)) || "—"}</td>
+        </tr>
+      `).join("");
+
+      const leaderboard = new Map();
+      scannerRows.forEach(({ r, meta }) => {
+        const name = r.lastScannerName || "Unknown";
+        if (!leaderboard.has(name)) {
+          leaderboard.set(name, { flights: new Set(), scans: 0, pastDue: 0 });
+        }
+        const entry = leaderboard.get(name);
+        entry.flights.add(r.key || r.flight || name + Math.random());
+        entry.scans += toNumber(r.scanCount);
+        if (meta.shortfall > 0) entry.pastDue += 1;
+      });
+
+      const leaderboardRows = Array.from(leaderboard.entries())
+        .map(([name, data]) => ({
+          name,
+          flights: data.flights.size,
+          scans: data.scans,
+          pastDue: data.pastDue,
+        }))
+        .sort((a, b) => (b.scans - a.scans) || (b.flights - a.flights));
+
+      leaderboardTb.innerHTML = leaderboardRows.map(row => `
+        <tr>
+          <td>${escapeHtml(row.name)}</td>
+          <td class="num">${row.flights}</td>
+          <td class="num">${row.scans}</td>
+          <td class="num">${row.pastDue}</td>
+        </tr>
+      `).join("");
+    }
+
+    function updateStickyOffset() {
+      const topbar = document.getElementById("topbar");
+      if (!topbar) return;
+      const height = topbar.getBoundingClientRect().height;
+      document.documentElement.style.setProperty("--sticky-top", `${height + 12}px`);
     }
 
     function escapeHtml(s) {
@@ -294,7 +872,94 @@
     }
     function escapeAttr(s) { return escapeHtml(s).replaceAll("\n", " "); }
 
+    function bindControls() {
+      const problemToggle = document.getElementById("problemOnly");
+      if (problemToggle) {
+        problemToggle.addEventListener("change", (e) => {
+          problemOnly = e.target.checked;
+          render();
+        });
+      }
+
+      document.querySelectorAll(".seg-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const density = btn.dataset.density;
+          densityMode = density === "compact" ? "compact" : "comfortable";
+          document.body.classList.toggle("density-compact", densityMode === "compact");
+          document.querySelectorAll(".seg-btn").forEach(el => {
+            el.classList.toggle("active", el.dataset.density === densityMode);
+          });
+          updateStickyOffset();
+        });
+      });
+
+      document.querySelectorAll(".sort-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const key = btn.dataset.sort;
+          if (!key) return;
+          if (sortKey === key) {
+            sortDir = sortDir === "asc" ? "desc" : "asc";
+          } else {
+            sortKey = key;
+            sortDir = "asc";
+          }
+          updateSortIndicators();
+          render();
+        });
+      });
+
+      document.querySelectorAll(".focus-pill").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const tab = btn.dataset.focus;
+          if (!tab) return;
+          setFocusTab(tab);
+        });
+      });
+
+      const table = document.getElementById("tbl");
+      if (table) {
+        table.addEventListener("click", (e) => {
+          const btn = e.target.closest(".row-expander");
+          if (!btn) return;
+          const rowId = btn.dataset.rowId;
+          const detail = document.querySelector(`tr[data-detail-for='${rowId}']`);
+          if (!detail) return;
+          const isOpen = !detail.classList.contains("hidden");
+          detail.classList.toggle("hidden", isOpen);
+          btn.setAttribute("aria-expanded", String(!isOpen));
+          btn.textContent = isOpen ? "▸" : "▾";
+        });
+      }
+
+      window.addEventListener("resize", updateStickyOffset);
+    }
+
+    function setFocusTab(tab) {
+      focusTab = tab;
+      document.querySelectorAll(".focus-pill").forEach(btn => {
+        const isActive = btn.dataset.focus === tab;
+        btn.classList.toggle("active", isActive);
+        btn.setAttribute("aria-selected", String(isActive));
+      });
+      document.querySelectorAll(".focus-panel").forEach(panel => {
+        const isActive = panel.dataset.focusPanel === tab;
+        panel.classList.toggle("active", isActive);
+        panel.toggleAttribute("hidden", !isActive);
+      });
+    }
+
+    function updateSortIndicators() {
+      document.querySelectorAll(".sort-btn").forEach(btn => {
+        const key = btn.dataset.sort;
+        btn.classList.toggle("active", key === sortKey);
+        btn.dataset.dir = key === sortKey ? sortDir : "";
+      });
+    }
+
     initOpsDayControl();
+    bindControls();
+    updateSortIndicators();
+    setFocusTab(focusTab);
     validateAuthThenStart();
   </script>
 </body>

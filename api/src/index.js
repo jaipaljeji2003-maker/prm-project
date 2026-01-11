@@ -237,7 +237,21 @@ function normalizeOpsDay(mode) {
   return v === "next" ? "next" : "current";
 }
 
-function computeOpsWindowToronto(mode = "current", now = new Date()) {
+function getOpsDateToronto(mode = "current", now = new Date()) {
+  const tz = DEFAULT_TZ;
+  const p = getTzParts(now, tz);
+
+  let opDate = { year: p.year, month: p.month, day: p.day };
+  if (p.hour < 4) opDate = addDaysLocal(opDate, -1, tz);
+
+  const opsMode = normalizeOpsDay(mode);
+  if (opsMode === "next") opDate = addDaysLocal(opDate, 1, tz);
+
+  const pad = v => String(v).padStart(2, "0");
+  return `${opDate.year}-${pad(opDate.month)}-${pad(opDate.day)}`;
+}
+
+function computeOpsWindowToronto(mode = "current", now = new Date(), options = {}) {
   const tz = DEFAULT_TZ;
   const p = getTzParts(now, tz);
 
@@ -253,8 +267,13 @@ function computeOpsWindowToronto(mode = "current", now = new Date()) {
   opEndUtc.setUTCMilliseconds(999);
 
   let start = opStartUtc;
-  const lookbackStart = new Date(now.getTime() - 60 * 60 * 1000);
-  if (lookbackStart > start) start = lookbackStart;
+  const lookbackMinutes = Number.isFinite(options?.lookbackMinutes)
+    ? Math.max(0, options.lookbackMinutes)
+    : (options?.fullDay ? 0 : 60);
+  if (lookbackMinutes > 0) {
+    const lookbackStart = new Date(now.getTime() - lookbackMinutes * 60 * 1000);
+    if (lookbackStart > start) start = lookbackStart;
+  }
 
   return {
     start,
@@ -463,6 +482,7 @@ const cachesState = {
   db:  { rows: null, ts: 0 }, // raw rows (arrays)
   users:{ rows: null, ts: 0 },
   scans:{ map: null, ts: 0 },
+  voidScans: { map: null, ts: 0 },
   patches: new Map(), // key -> { patch, expAt }
 };
 
@@ -533,6 +553,27 @@ async function getScanCounts(env) {
   return map;
 }
 
+async function getVoidScansCount(env, opsDay) {
+  const now = Date.now();
+  const opsDate = getOpsDateToronto(opsDay);
+  if (cachesState.voidScans.map && (now - cachesState.voidScans.ts) < SCAN_CACHE_MS) {
+    return cachesState.voidScans.map.get(opsDate) ?? null;
+  }
+
+  const sheet = env.VOID_SCANS_SHEET_NAME || "PRM_VoidScans";
+  const values = await sheetsGetValues(env, `${sheet}!A2:C`);
+  const map = new Map();
+  for (const row of values) {
+    const rowDate = String(row?.[0] ?? "").trim();
+    if (!rowDate) continue;
+    const rawCount = Number(String(row?.[2] ?? "").trim());
+    if (Number.isNaN(rawCount)) continue;
+    map.set(rowDate, (map.get(rowDate) || 0) + rawCount);
+  }
+  cachesState.voidScans = { map, ts: now };
+  return map.get(opsDate) ?? null;
+}
+
 // ---------- USERS lookup ----------
 async function getUsers(env) {
   const now = Date.now();
@@ -592,8 +633,8 @@ async function handleValidate(req, env) {
 }
 
 // ---------- Dispatch / Lead row shaping ----------
-function operationalWindow(env, opsDay) {
-  return computeOpsWindowToronto(opsDay);
+function operationalWindow(env, opsDay, options) {
+  return computeOpsWindowToronto(opsDay, new Date(), options);
 }
 
 // Indices based on your DB_HEADER order (0-based)
@@ -1106,8 +1147,11 @@ export default {
         const params = {
           opsDay: url.searchParams.get("opsDay") || "current",
         };
-        const rows = await mgmtRows(env, params);
-        return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
+        const [rows, voidScans] = await Promise.all([
+          mgmtRows(env, params),
+          getVoidScansCount(env, params.opsDay),
+        ]);
+        return withCors(json({ ok:true, rows, voidScans, generatedAt: new Date().toISOString() }), origin);
       }
 
       return withCors(json({ ok:false, error:"Not found" }, { status: 404 }), origin);
