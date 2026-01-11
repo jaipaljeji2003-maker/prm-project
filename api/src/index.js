@@ -8,6 +8,7 @@
  *   SPREADSHEET_ID
  *   USERS_SHEET_NAME (default: USERS
  *   DISPATCH_DB_SHEET_NAME (default: Dispatch_DB)
+ *   SCAN_COUNTS_SHEET_NAME (default: PRM_ScanCounts)
  *   GOOGLE_SERVICE_ACCOUNT_EMAIL
  * Secrets (recommended):
  *   GOOGLE_PRIVATE_KEY
@@ -15,9 +16,9 @@
  */
 
 const ROLE_ACCESS = {
-  Dispatch: { dispatch: true, lead: false },
-  Lead:     { dispatch: false, lead: true },
-  Mgmt:     { dispatch: true, lead: true },
+  Dispatch: { dispatch: true, lead: false, mgmt: false },
+  Lead:     { dispatch: false, lead: true, mgmt: false },
+  Mgmt:     { dispatch: true, lead: true, mgmt: true },
 };
 
 const DB_RANGE_HEADER = "A1:AO1";   // 41 columns (matches your DB_HEADER)
@@ -30,6 +31,7 @@ const HDR_CACHE_MS = 5 * 60_000;
 const IDX_CACHE_MS = 30_000;
 const USERS_CACHE_MS = 120_000;
 const ROW_CACHE_MS = 1_000;
+const SCAN_CACHE_MS = 10_000;
 
 const DEFAULT_TZ = "America/Toronto";
 
@@ -460,6 +462,7 @@ const cachesState = {
   idx: { map: null, ts: 0 },
   db:  { rows: null, ts: 0 }, // raw rows (arrays)
   users:{ rows: null, ts: 0 },
+  scans:{ map: null, ts: 0 },
   patches: new Map(), // key -> { patch, expAt }
 };
 
@@ -512,6 +515,22 @@ async function getDbRows(env) {
   const values = await sheetsGetValues(env, `${sheet}!${DB_RANGE_BODY}`);
   cachesState.db = { rows: values, ts: now };
   return values;
+}
+
+async function getScanCounts(env) {
+  const now = Date.now();
+  if (cachesState.scans.map && (now - cachesState.scans.ts) < SCAN_CACHE_MS) return cachesState.scans.map;
+
+  const sheet = env.SCAN_COUNTS_SHEET_NAME || "PRM_ScanCounts";
+  const values = await sheetsGetValues(env, `${sheet}!A2:B`);
+  const map = new Map();
+  for (const row of values) {
+    const key = String(row?.[0] ?? "").trim();
+    if (!key) continue;
+    map.set(key, row?.[1] ?? "");
+  }
+  cachesState.scans = { map, ts: now };
+  return map;
 }
 
 // ---------- USERS lookup ----------
@@ -597,6 +616,7 @@ async function dispatchRowsImpl(env, opsDay) {
   const hdr = await getHeaderMap(env);
   const watchCol = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"] || null;
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
+  const scanCounts = await getScanCounts(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
   const win = operationalWindow(env, opsDay);
@@ -613,6 +633,7 @@ async function dispatchRowsImpl(env, opsDay) {
 
     const dispatchAcked = ackCol ? isTrue(r[ackCol - 1]) : false;
 
+    const key = String(r[IX.key] || "");
     const obj = {
       key:        String(r[IX.key] || ""),
       type:       String(r[IX.type] || ""),
@@ -634,6 +655,7 @@ async function dispatchRowsImpl(env, opsDay) {
 
       assignment: (r[IX.assignment] ?? "").toString(),
       pax:        (r[IX.pax] ?? "").toString(),
+      scanCount:  String(scanCounts.get(key) ?? ""),
 
       gateChanged: dispatchAcked ? false : (r[IX.gateChanged] === true),
       timeChanged: dispatchAcked ? false : (r[IX.timeChanged] === true),
@@ -672,6 +694,7 @@ async function leadRowsImpl(env, params) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
   const watchCol = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"] || null;
+  const scanCounts = await getScanCounts(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
   const win = operationalWindow(env, opsDay);
@@ -714,8 +737,9 @@ async function leadRowsImpl(env, params) {
       if (!inMyZone && !movedOutNeedsAck) continue;
     }
 
+    const key = String(r[IX.key] || "");
     const obj = {
-      key:        String(r[IX.key] || ""),
+      key,
       type:       String(r[IX.type] || ""),
       flight,
       // Use the already-parsed dt instead of re-parsing with toIso(...)
@@ -729,6 +753,7 @@ async function leadRowsImpl(env, params) {
 
       assignment: String(r[IX.assignment] ?? ""),
       pax:        String(r[IX.pax] ?? ""),
+      scanCount:  String(scanCounts.get(key) ?? ""),
 
       alert: ackedHere ? "" : String(r[IX.alertText] || ""),
 
@@ -759,6 +784,67 @@ function leadCacheKey(params) {
 
 async function leadRows(env, params) {
   return cachedRows(leadCacheKey(params), () => leadRowsImpl(env, params));
+}
+
+async function mgmtRowsImpl(env, opsDay) {
+  const rows = await getDbRows(env);
+  const hdr = await getHeaderMap(env);
+  const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
+  const scanCounts = await getScanCounts(env);
+
+  const tz = env.TIMEZONE || DEFAULT_TZ;
+  const win = operationalWindow(env, opsDay);
+
+  const out = [];
+  for (const r of rows) {
+    if (!r || !r.length) continue;
+    const t = r[IX.time];
+    if (t == null || t === "") continue;
+
+    const dt = parseDbTime(t, tz);
+    if (!dt || isNaN(dt.getTime())) continue;
+    if (dt < win.start || dt > win.end) continue;
+
+    const dispatchAcked = ackCol ? isTrue(r[ackCol - 1]) : false;
+    const key = String(r[IX.key] || "");
+
+    const obj = {
+      key,
+      type:       String(r[IX.type] || ""),
+      flight:     String(r[IX.flight] || ""),
+      timeEst:    dt.toISOString(),
+      sched:      toIso(r[IX.sched], tz),
+      origin:     String(r[IX.origin] || ""),
+      gate:       String(r[IX.gate] || ""),
+      zone:       String(r[IX.zoneCur] || ""),
+      alert:      dispatchAcked ? "" : String(r[IX.alertText] || ""),
+
+      wchr:       (r[IX.wchr] ?? "").toString(),
+      wchc:       (r[IX.wchc] ?? "").toString(),
+      comment:    (r[IX.comment] ?? "").toString(),
+      assignment: (r[IX.assignment] ?? "").toString(),
+      pax:        (r[IX.pax] ?? "").toString(),
+      scanCount:  String(scanCounts.get(key) ?? ""),
+
+      gateChanged: dispatchAcked ? false : (r[IX.gateChanged] === true),
+      timeChanged: dispatchAcked ? false : (r[IX.timeChanged] === true),
+      zoneChanged: dispatchAcked ? false : (r[IX.zoneChanged] === true),
+
+      timePrev:  toIso(r[IX.timePrev], tz),
+      timeDelta: (r[IX.timeDelta] ?? "").toString(),
+      timeChgAt: toIso(r[IX.timeChgAt], tz),
+    };
+
+    out.push([dt.getTime(), applyPatchesToRowObj(obj)]);
+  }
+
+  out.sort((a, b) => a[0] - b[0]);
+  return out.map(x => x[1]);
+}
+
+async function mgmtRows(env, params) {
+  const opsDay = normalizeOpsDay(params?.opsDay);
+  return cachedRows(`mgmt:${opsDay}`, () => mgmtRowsImpl(env, opsDay));
 }
 
 
@@ -1012,6 +1098,16 @@ export default {
         const payload = await req.json().catch(() => ({}));
         const out = await ackLead(env, payload.key, payload.zone);
         return withCors(json(out), origin);
+      }
+
+      // ---- management ----
+      if (path === "/mgmt/rows" && req.method === "GET") {
+        await requireAuth(req, env, "mgmt");
+        const params = {
+          opsDay: url.searchParams.get("opsDay") || "current",
+        };
+        const rows = await mgmtRows(env, params);
+        return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
       }
 
       return withCors(json({ ok:false, error:"Not found" }, { status: 404 }), origin);

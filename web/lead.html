@@ -56,7 +56,7 @@
       <thead>
         <tr>
           <th>Watch</th><th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
-          <th>WCHR</th><th>WCHC</th><th>Alert</th>
+          <th>WCHR</th><th>WCHC</th><th>PRMGO Scans</th><th>Alert</th>
           <th>Assignment</th><th>Pax</th><th>Ack</th>
         </tr>
       </thead>
@@ -416,7 +416,7 @@
 
       if (!filtered.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="empty" colspan="12">No flights match the current filters.</td>`;
+        tr.innerHTML = `<td class="empty" colspan="13">No flights match the current filters.</td>`;
         tb.appendChild(tr);
         return;
       }
@@ -450,6 +450,7 @@
           <td>${escapeHtml(r.zone || "")}</td>
           <td class="num">${escapeHtml(r.wchr || "")}</td>
           <td class="num">${escapeHtml(r.wchc || "")}</td>
+          <td class="num">${escapeHtml(r.scanCount || "")}</td>
           <td class="alert">${escapeHtml(r.alert || "")}</td>
           <td><input class="cell-input" data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
           <td><input class="cell-input num" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
