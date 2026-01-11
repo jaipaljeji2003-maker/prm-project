@@ -151,6 +151,8 @@
 
     const ackSuppress = new Map();
     const ACK_SUPPRESS_MS = 8000;
+    const pendingEdits = new Map();
+    const PENDING_EDIT_TTL_MS = 15_000;
 
     let requestSeq = 0;
 
@@ -285,11 +287,33 @@
       });
     }
 
+    function rememberPendingEdit(key, field, val) {
+      if (!key || !field) return;
+      pendingEdits.set(String(key), { field, val, exp: Date.now() + PENDING_EDIT_TTL_MS });
+    }
+
+    function clearPendingEdit(key, field) {
+      if (!key || !field) return;
+      const entry = pendingEdits.get(String(key));
+      if (entry && entry.field === field) pendingEdits.delete(String(key));
+    }
+
+    function applyPendingEdits_(arr) {
+      const now = Date.now();
+      return (arr || []).map(r => {
+        const key = String(r.key || "");
+        const entry = pendingEdits.get(key);
+        if (!entry) return r;
+        if (now > entry.exp) { pendingEdits.delete(key); return r; }
+        return { ...r, [entry.field]: entry.val };
+      });
+    }
+
     function useCacheThenFetch_() {
       const key = cacheKey_();
       const hit = cache.get(key);
       if (hit && (Date.now() - hit.ts) <= CACHE_MS) {
-        rows = applyAckSuppression_(hit.rows);
+        rows = applyPendingEdits_(applyAckSuppression_(hit.rows));
         render();
         load(false);
       } else load(true);
@@ -357,7 +381,7 @@
 
         const incoming = data.rows || [];
         const cleaned = applyAckSuppression_(incoming);
-        rows = cleaned;
+        rows = applyPendingEdits_(cleaned);
         cache.set(cacheKey_(), { ts: Date.now(), rows: incoming });
         render();
         setLoading(false);
@@ -562,6 +586,7 @@
         const existing = rows.find(r => String(r.key) === String(key));
         prevWatchVal = existing ? (existing.watchlist ?? "") : "";
         applyLocalFieldUpdate(key, field, val);
+        rememberPendingEdit(key, field, val);
       }
 
       try {
@@ -577,14 +602,17 @@
         if (!data || !data.ok) {
           setErr((data && data.error) || "Update failed");
           if (isWatchlist) {
+            clearPendingEdit(key, field);
             applyLocalFieldUpdate(key, field, prevWatchVal);
             await refreshAfterAction();
           }
           return;
         }
+        if (isWatchlist) clearPendingEdit(key, field);
       } catch (e) {
         setErr(e && e.message ? e.message : String(e));
         if (isWatchlist) {
+          clearPendingEdit(key, field);
           applyLocalFieldUpdate(key, field, prevWatchVal);
           await refreshAfterAction();
         }
