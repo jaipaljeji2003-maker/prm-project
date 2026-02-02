@@ -1,0 +1,424 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PRM Management</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .chartGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .chartCard {
+      border: 1px solid #e1e1e1;
+      border-radius: 12px;
+      background: #fff;
+      padding: 12px;
+    }
+    .chartTitle {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    .tableWrap.tight td, .tableWrap.tight th {
+      padding: 8px 6px;
+    }
+    .scrollX {
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <button onclick="manualRefresh()">Refresh</button>
+    <button onclick="logout()">Logout</button>
+
+    <div class="filters">
+      <span>Bucket</span>
+      <select id="bucketSel" onchange="onBucketChange()">
+        <option value="5">5 min</option>
+        <option value="10">10 min</option>
+        <option value="15" selected>15 min</option>
+        <option value="30">30 min</option>
+        <option value="60">60 min</option>
+      </select>
+    </div>
+
+    <div class="filters" id="zoneControls" style="flex: 1;">
+      <button class="pill active" id="zALL" onclick="setZone('ALL')">All</button>
+      <button class="pill" id="zTB" onclick="setZone('TB')">TB</button>
+      <button class="pill" id="zGates" onclick="setZone('Gates')">Gates</button>
+      <button class="pill" id="zPierA" onclick="setZone('Pier A')">Pier A</button>
+      <button class="pill" id="zT1" onclick="setZone('T1')">T1</button>
+      <button class="pill" id="zUnassigned" onclick="setZone('Unassigned')">Unassigned</button>
+      <select id="zoneSel" onchange="onZoneDropdownChange()"></select>
+    </div>
+
+    <div class="filters">
+      <button class="pill active" id="tALL" onclick="setType('ALL')">All</button>
+      <button class="pill" id="tARR" onclick="setType('ARR')">ARR</button>
+      <button class="pill" id="tDEP" onclick="setType('DEP')">DEP</button>
+    </div>
+
+    <div class="searchWrap">
+      <input id="q" placeholder="Search flight (ex: AC123, TS 101)..." oninput="onSearchInput()" />
+      <div class="hint">Search matches Flight (spaces ignored).</div>
+    </div>
+  </div>
+
+  <div id="err" class="err"></div>
+  <div id="loading" class="loading" style="display:none;">Loading…</div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="chartGrid">
+    <div class="chartCard">
+      <div class="chartTitle">PRM by Zone</div>
+      <canvas id="chartZone"></canvas>
+    </div>
+    <div class="chartCard">
+      <div class="chartTitle">PRM Over Time</div>
+      <canvas id="chartTime"></canvas>
+    </div>
+    <div class="chartCard">
+      <div class="chartTitle">WCHR vs WCHC</div>
+      <canvas id="chartMix"></canvas>
+    </div>
+  </div>
+
+  <div class="tableWrap tight scrollX" style="margin-top: 12px;">
+    <table id="heatTable">
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="tableWrap" style="margin-top: 12px;">
+    <table id="flightTable">
+      <thead>
+        <tr>
+          <th>Plan</th><th>EST</th><th>Flight</th><th>Type</th><th>Gate</th><th>Zone</th>
+          <th>WCHR</th><th>WCHC</th><th>PRM</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script src="/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const API_BASE = (window.PRM_CONFIG && window.PRM_CONFIG.API_BASE) || "";
+    const LS_TOKEN = "PRM_TOKEN";
+    const LS_USER  = "PRM_USER";
+
+    const ZONE_PILLS = ["ALL", "TB", "Gates", "Pier A", "T1", "Unassigned"];
+
+    let bucketMin = 15;
+    let selectedZone = "ALL";
+    let selectedType = "ALL";
+    let searchQ = "";
+    let zonesAll = [];
+
+    let typingTimer = null;
+
+    let chartZone = null;
+    let chartTime = null;
+    let chartMix = null;
+
+    function getToken(){ return localStorage.getItem(LS_TOKEN) || ""; }
+    function hardRedirectToLogin(){ window.location.href = "/"; }
+
+    function setErr(msg){ document.getElementById("err").textContent = msg || ""; }
+    function setLoading(on){ document.getElementById("loading").style.display = on ? "block" : "none"; }
+
+    function logout(){
+      localStorage.removeItem(LS_TOKEN);
+      localStorage.removeItem(LS_USER);
+      hardRedirectToLogin();
+    }
+
+    function setZone(zone){
+      selectedZone = zone;
+      updateZoneControls();
+      load();
+    }
+
+    function setType(type){
+      selectedType = type;
+      document.getElementById("tALL").classList.toggle("active", type === "ALL");
+      document.getElementById("tARR").classList.toggle("active", type === "ARR");
+      document.getElementById("tDEP").classList.toggle("active", type === "DEP");
+      load();
+    }
+
+    function updateZoneControls(){
+      document.getElementById("zALL").classList.toggle("active", selectedZone === "ALL");
+      document.getElementById("zTB").classList.toggle("active", selectedZone === "TB");
+      document.getElementById("zGates").classList.toggle("active", selectedZone === "Gates");
+      document.getElementById("zPierA").classList.toggle("active", selectedZone === "Pier A");
+      document.getElementById("zT1").classList.toggle("active", selectedZone === "T1");
+      document.getElementById("zUnassigned").classList.toggle("active", selectedZone === "Unassigned");
+
+      const sel = document.getElementById("zoneSel");
+      if (!sel) return;
+      const extraZones = zonesAll.filter(z => !ZONE_PILLS.includes(z));
+      sel.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = extraZones.length ? "More zones…" : "No extra zones";
+      sel.appendChild(placeholder);
+      extraZones.forEach(zone => {
+        const opt = document.createElement("option");
+        opt.value = zone;
+        opt.textContent = zone;
+        sel.appendChild(opt);
+      });
+      if (extraZones.includes(selectedZone)) {
+        sel.value = selectedZone;
+      } else {
+        sel.value = "";
+      }
+    }
+
+    function onZoneDropdownChange(){
+      const sel = document.getElementById("zoneSel");
+      if (sel && sel.value) setZone(sel.value);
+    }
+
+    function onBucketChange(){
+      const val = parseInt(document.getElementById("bucketSel").value, 10);
+      bucketMin = Number.isFinite(val) ? val : 15;
+      load();
+    }
+
+    function onSearchInput(){
+      const val = document.getElementById("q").value || "";
+      searchQ = val;
+      if (typingTimer) clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => load(), 300);
+    }
+
+    function manualRefresh(){
+      load();
+    }
+
+    function fmtWindow(iso){
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", month: "short", day: "2-digit" });
+    }
+
+    function renderSummary(data){
+      const summary = document.getElementById("summary");
+      summary.innerHTML = "";
+
+      const cards = [
+        { title: "WCHR", value: data.kpis.wchr },
+        { title: "WCHC", value: data.kpis.wchc },
+        { title: "Total PRM", value: data.kpis.prm },
+        { title: "Flights", value: data.kpis.flights },
+        { title: "Window", value: `${fmtWindow(data.window.startISO)} → ${fmtWindow(data.window.endISO)}` },
+      ];
+
+      cards.forEach(card => {
+        const el = document.createElement("div");
+        el.className = "summaryCard";
+        const title = document.createElement("div");
+        title.className = "summaryTitle";
+        title.textContent = card.title;
+        const value = document.createElement("div");
+        value.className = "summaryValue";
+        value.textContent = card.value;
+        el.appendChild(title);
+        el.appendChild(value);
+        summary.appendChild(el);
+      });
+    }
+
+    function renderCharts(data){
+      const zones = data.zones || [];
+      const zoneTotals = zones.map(z => data.zoneTotals[z] || 0);
+      const timeLabels = (data.timeTotals || []).map(item => item.bucket);
+      const timeTotals = (data.timeTotals || []).map(item => item.prm);
+
+      const zoneCtx = document.getElementById("chartZone").getContext("2d");
+      if (!chartZone) {
+        chartZone = new Chart(zoneCtx, {
+          type: "bar",
+          data: { labels: zones, datasets: [{ label: "PRM", data: zoneTotals, backgroundColor: "#4c6fff" }] },
+          options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+        });
+      } else {
+        chartZone.data.labels = zones;
+        chartZone.data.datasets[0].data = zoneTotals;
+        chartZone.update();
+      }
+
+      const timeCtx = document.getElementById("chartTime").getContext("2d");
+      if (!chartTime) {
+        chartTime = new Chart(timeCtx, {
+          type: "line",
+          data: { labels: timeLabels, datasets: [{ label: "PRM", data: timeTotals, borderColor: "#00a878", tension: 0.25, fill: false }] },
+          options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+        });
+      } else {
+        chartTime.data.labels = timeLabels;
+        chartTime.data.datasets[0].data = timeTotals;
+        chartTime.update();
+      }
+
+      const mixCtx = document.getElementById("chartMix").getContext("2d");
+      const mixData = [data.kpis.wchr || 0, data.kpis.wchc || 0];
+      if (!chartMix) {
+        chartMix = new Chart(mixCtx, {
+          type: "doughnut",
+          data: { labels: ["WCHR", "WCHC"], datasets: [{ data: mixData, backgroundColor: ["#ffb347", "#7dd3fc"] }] },
+          options: { plugins: { legend: { position: "bottom" } } }
+        });
+      } else {
+        chartMix.data.datasets[0].data = mixData;
+        chartMix.update();
+      }
+    }
+
+    function renderHeatMatrix(data){
+      const zones = data.zones || [];
+      const thead = document.querySelector("#heatTable thead");
+      const tbody = document.querySelector("#heatTable tbody");
+      thead.innerHTML = "";
+      tbody.innerHTML = "";
+
+      const headRow = document.createElement("tr");
+      const thBucket = document.createElement("th");
+      thBucket.textContent = "Plan";
+      headRow.appendChild(thBucket);
+      zones.forEach(zone => {
+        const th = document.createElement("th");
+        th.textContent = zone;
+        headRow.appendChild(th);
+      });
+      const thTotal = document.createElement("th");
+      thTotal.textContent = "Total";
+      headRow.appendChild(thTotal);
+      thead.appendChild(headRow);
+
+      if (!data.heatRows || !data.heatRows.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = zones.length + 2;
+        td.className = "empty";
+        td.textContent = "No pre-alerts for this filter.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      data.heatRows.forEach(row => {
+        const tr = document.createElement("tr");
+        const tdBucket = document.createElement("td");
+        tdBucket.textContent = row.bucket;
+        tr.appendChild(tdBucket);
+        zones.forEach(zone => {
+          const td = document.createElement("td");
+          td.className = "num";
+          td.textContent = row.byZone[zone] || 0;
+          tr.appendChild(td);
+        });
+        const tdTotal = document.createElement("td");
+        tdTotal.className = "num";
+        tdTotal.textContent = row.total || 0;
+        tr.appendChild(tdTotal);
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderFlights(data){
+      const tbody = document.querySelector("#flightTable tbody");
+      tbody.innerHTML = "";
+      if (!data.flights || !data.flights.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 9;
+        td.className = "empty";
+        td.textContent = "No flights for this filter.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      data.flights.forEach(row => {
+        const tr = document.createElement("tr");
+        const cells = [row.plan, row.est, row.flight, row.type, row.gate, row.zone, row.wchr, row.wchc, row.prm];
+        cells.forEach((val, idx) => {
+          const td = document.createElement("td");
+          if (idx >= 6) td.className = "num";
+          td.textContent = val;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function load(){
+      const token = getToken();
+      if (!token) return hardRedirectToLogin();
+      setLoading(true);
+      setErr("");
+
+      const url = new URL(API_BASE + "/mgmt/prealerts");
+      url.searchParams.set("bucketMin", bucketMin);
+      url.searchParams.set("zone", selectedZone);
+      url.searchParams.set("type", selectedType);
+      url.searchParams.set("q", searchQ);
+
+      try {
+        const res = await fetch(url.toString(), {
+          headers: { "authorization": "Bearer " + token }
+        });
+        if (res.status === 401 || res.status === 403) {
+          return logout();
+        }
+        const data = await res.json();
+        if (!data || !data.ok) {
+          setErr((data && data.error) || "Failed to load pre-alerts.");
+          return;
+        }
+        zonesAll = data.zones || [];
+        updateZoneControls();
+        renderSummary(data);
+        renderCharts(data);
+        renderHeatMatrix(data);
+        renderFlights(data);
+      } catch (err) {
+        setErr(err && err.message ? err.message : String(err));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function boot(){
+      const token = getToken();
+      if (!token) return hardRedirectToLogin();
+      try {
+        const res = await fetch(API_BASE + "/auth/validate?app=mgmt", {
+          headers: { "authorization": "Bearer " + token }
+        });
+        const data = await res.json();
+        if (!data || !data.ok) return logout();
+        await load();
+      } catch {
+        logout();
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

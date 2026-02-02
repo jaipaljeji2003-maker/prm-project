@@ -15,9 +15,9 @@
  */
 
 const ROLE_ACCESS = {
-  Dispatch: { dispatch: true, lead: false },
-  Lead:     { dispatch: false, lead: true },
-  Mgmt:     { dispatch: true, lead: true },
+  Dispatch: { dispatch: true, lead: false, mgmt: false },
+  Lead:     { dispatch: false, lead: true, mgmt: false },
+  Mgmt:     { dispatch: true, lead: true, mgmt: true },
 };
 
 const DB_RANGE_HEADER = "A1:AO1";   // 41 columns (matches your DB_HEADER)
@@ -207,6 +207,21 @@ function getTzParts(date, tz) {
   };
 }
 
+const _timeOnlyCache = new Map();
+function formatTimeOnly(date, tz) {
+  let fmt = _timeOnlyCache.get(tz);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    _timeOnlyCache.set(tz, fmt);
+  }
+  return fmt.format(date);
+}
+
 
 // Convert a local date-time in `tz` to a UTC Date using iterative correction (DST-safe).
 function zonedTimeToUtc({ year, month, day, hour, minute, second }, tz) {
@@ -261,6 +276,27 @@ function computeOpsWindowToronto(mode = "current", now = new Date()) {
     endISO: opEndUtc.toISOString(),
     startMs: start.getTime(),
     endMs: opEndUtc.getTime(),
+  };
+}
+
+function computeMgmtWindowToronto(now = new Date()) {
+  const tz = DEFAULT_TZ;
+  const p = getTzParts(now, tz);
+  let opDate = { year: p.year, month: p.month, day: p.day };
+  if (p.hour < 4) opDate = addDaysLocal(opDate, -1, tz);
+
+  const startUtc = zonedTimeToUtc({ ...opDate, hour: 2, minute: 0, second: 0 }, tz);
+  const endDate = addDaysLocal(opDate, 1, tz);
+  const endUtc = zonedTimeToUtc({ ...endDate, hour: 3, minute: 59, second: 59 }, tz);
+  endUtc.setUTCMilliseconds(999);
+
+  return {
+    start: startUtc,
+    end: endUtc,
+    startISO: startUtc.toISOString(),
+    endISO: endUtc.toISOString(),
+    startMs: startUtc.getTime(),
+    endMs: endUtc.getTime(),
   };
 }
 
@@ -761,6 +797,147 @@ async function leadRows(env, params) {
   return cachedRows(leadCacheKey(params), () => leadRowsImpl(env, params));
 }
 
+// ---------- Mgmt pre-alerts ----------
+const MGMT_ZONE_ORDER = ["TB", "Gates", "Pier A", "T1", "Unassigned"];
+
+function parseNumber(v) {
+  if (v == null || v === "") return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mgmtZoneList(seenZones) {
+  const extras = Array.from(seenZones).filter(z => !MGMT_ZONE_ORDER.includes(z));
+  extras.sort((a, b) => a.localeCompare(b));
+  return [...MGMT_ZONE_ORDER, ...extras];
+}
+
+async function mgmtPrealerts(env, params) {
+  const bucketMinRaw = parseInt(params.bucketMin || "15", 10);
+  const bucketMin = Number.isFinite(bucketMinRaw) && bucketMinRaw > 0 ? bucketMinRaw : 15;
+  const zoneWanted = normalizeZone(params.zone || "ALL") || "ALL";
+  const typeFilter = String(params.type || "ALL").toUpperCase();
+  const q = String(params.q || "").trim().toUpperCase().replace(/\s+/g, "");
+
+  const tz = env.TIMEZONE || DEFAULT_TZ;
+  const win = computeMgmtWindowToronto(new Date());
+  const rows = await getDbRows(env);
+
+  const bucketMs = bucketMin * 60_000;
+  const buckets = new Map(); // bucketMs -> { byZone, total }
+  const timeTotals = new Map(); // bucketMs -> prm
+  const zoneTotals = {};
+  const flights = [];
+  const zoneSet = new Set();
+
+  let totalWchr = 0;
+  let totalWchc = 0;
+  let totalPrm = 0;
+
+  for (const r of rows) {
+    if (!r || !r.length) continue;
+
+    const t = r[IX.time];
+    if (t == null || t === "") continue;
+    const dt = parseDbTime(t, tz);
+    if (!dt || isNaN(dt.getTime())) continue;
+    if (dt < win.start || dt > win.end) continue;
+
+    const rowType = String(r[IX.type] || "").toUpperCase();
+    if (typeFilter !== "ALL" && rowType !== typeFilter) continue;
+
+    const flight = String(r[IX.flight] || "");
+    const flightQ = flight.toUpperCase().replace(/\s+/g, "");
+    if (q && !flightQ.includes(q)) continue;
+
+    const wchr = parseNumber(r[IX.wchr]);
+    const wchc = parseNumber(r[IX.wchc]);
+    const prm = wchr + wchc;
+    if (prm <= 0) continue;
+
+    let zone = normalizeZone(r[IX.zoneCur] || "");
+    if (!zone) zone = "Unassigned";
+    if (zoneWanted !== "ALL" && zone !== zoneWanted) continue;
+
+    let planMs = dt.getTime();
+    if (rowType === "DEP") {
+      const dest = String(r[IX.origin] || "").trim().toUpperCase();
+      const offsetMin = dest.startsWith("Y") ? 60 : 90;
+      planMs -= offsetMin * 60_000;
+    }
+
+    const bucketStartMs = Math.floor(planMs / bucketMs) * bucketMs;
+    let bucket = buckets.get(bucketStartMs);
+    if (!bucket) {
+      bucket = { byZone: {}, total: 0 };
+      buckets.set(bucketStartMs, bucket);
+    }
+
+    bucket.byZone[zone] = (bucket.byZone[zone] || 0) + prm;
+    bucket.total += prm;
+
+    timeTotals.set(bucketStartMs, (timeTotals.get(bucketStartMs) || 0) + prm);
+    zoneTotals[zone] = (zoneTotals[zone] || 0) + prm;
+    zoneSet.add(zone);
+
+    totalWchr += wchr;
+    totalWchc += wchc;
+    totalPrm += prm;
+
+    flights.push({
+      plan: formatTimeOnly(new Date(planMs), tz),
+      est: formatTimeOnly(dt, tz),
+      flight,
+      type: rowType,
+      gate: String(r[IX.gate] || ""),
+      zone,
+      wchr,
+      wchc,
+      prm,
+    });
+  }
+
+  flights.sort((a, b) => {
+    if (a.plan === b.plan) return a.flight.localeCompare(b.flight);
+    return a.plan.localeCompare(b.plan);
+  });
+
+  const zones = mgmtZoneList(zoneSet);
+  const bucketEntries = Array.from(buckets.entries()).sort((a, b) => a[0] - b[0]);
+  const heatRows = bucketEntries.map(([bucketMsStart, bucket]) => {
+    const byZone = {};
+    for (const z of zones) byZone[z] = bucket.byZone[z] || 0;
+    return {
+      bucket: formatTimeOnly(new Date(bucketMsStart), tz),
+      byZone,
+      total: bucket.total,
+    };
+  });
+
+  const timeTotalsArr = Array.from(timeTotals.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([bucketMsStart, prm]) => ({
+      bucket: formatTimeOnly(new Date(bucketMsStart), tz),
+      prm,
+    }));
+
+  const bucketKeys = heatRows.map(row => row.bucket);
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    window: { startISO: win.startISO, endISO: win.endISO },
+    params: { bucketMin, zone: zoneWanted, type: typeFilter, q },
+    kpis: { wchr: totalWchr, wchc: totalWchc, prm: totalPrm, flights: flights.length },
+    zones,
+    bucketKeys,
+    heatRows,
+    zoneTotals,
+    timeTotals: timeTotalsArr,
+    flights,
+  };
+}
+
 
 // ---------- Writes ----------
 async function updateDispatch(env, payload) {
@@ -1011,6 +1188,19 @@ export default {
         await requireAuth(req, env, "lead");
         const payload = await req.json().catch(() => ({}));
         const out = await ackLead(env, payload.key, payload.zone);
+        return withCors(json(out), origin);
+      }
+
+      // ---- mgmt ----
+      if (path === "/mgmt/prealerts" && req.method === "GET") {
+        await requireAuth(req, env, "mgmt");
+        const params = {
+          bucketMin: url.searchParams.get("bucketMin") || "15",
+          zone: url.searchParams.get("zone") || "ALL",
+          type: url.searchParams.get("type") || "ALL",
+          q: url.searchParams.get("q") || "",
+        };
+        const out = await mgmtPrealerts(env, params);
         return withCors(json(out), origin);
       }
 
