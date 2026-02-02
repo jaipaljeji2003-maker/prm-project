@@ -30,6 +30,7 @@ const HDR_CACHE_MS = 5 * 60_000;
 const IDX_CACHE_MS = 30_000;
 const USERS_CACHE_MS = 120_000;
 const ROW_CACHE_MS = 1_000;
+const AVG_CACHE_MS = 10 * 60_000;
 
 const DEFAULT_TZ = "America/Toronto";
 
@@ -45,6 +46,7 @@ const ZONE_ACK_COL = {
 
 const _rowCache = new Map();
 const _rowInflight = new Map();
+const _avgCache = { map: null, ts: 0 };
 
 // Sheets remain the single source of truth; this short cache only smooths bursty reads.
 async function cachedRows(key, fn) {
@@ -116,6 +118,39 @@ function normalizeZone(z) {
   if (up === "UNASSIGNED") return "Unassigned";
   if (up === "ALL") return "ALL";
   return s;
+}
+
+function normalizeFlightNorm(flight) {
+  return String(flight || "").toUpperCase().replace(/\s+/g, "");
+}
+
+function normalizeType(type) {
+  return String(type || "").trim().toUpperCase();
+}
+
+function buildFlightKey(type, flight) {
+  const t = normalizeType(type);
+  const f = normalizeFlightNorm(flight);
+  if (!t || !f) return "";
+  return `${t}|${f}`;
+}
+
+function formatYmd({ year, month, day }) {
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return `${year}-${mm}-${dd}`;
+}
+
+function parseYmd(s) {
+  const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+}
+
+function toNumber(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /** Convert Google Sheets serial date-time to JS Date (UTC instant). */
@@ -479,6 +514,87 @@ async function sheetsBatchUpdate(env, dataRanges /* [{range, values:[[...]]}] */
   return out;
 }
 
+async function sheetsGetValuesFor(env, spreadsheetId, rangeA1) {
+  const token = await getGoogleAccessToken(env);
+  const sid = spreadsheetId;
+  if (!sid) throw new Error("Missing spreadsheetId.");
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/${encodeURIComponent(rangeA1)}`);
+  url.searchParams.set("valueRenderOption", "UNFORMATTED_VALUE");
+  url.searchParams.set("dateTimeRenderOption", "SERIAL_NUMBER");
+
+  const resp = await fetch(url.toString(), {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(`Sheets GET error: ${data.error?.message || resp.status}`);
+  return data.values || [];
+}
+
+async function sheetsBatchUpdateFor(env, spreadsheetId, dataRanges) {
+  const token = await getGoogleAccessToken(env);
+  const sid = spreadsheetId;
+  if (!sid) throw new Error("Missing spreadsheetId.");
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchUpdate?valueInputOption=USER_ENTERED`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ data: dataRanges }),
+  });
+  const out = await resp.json();
+  if (!resp.ok) throw new Error(`Sheets UPDATE error: ${out.error?.message || resp.status}`);
+  return out;
+}
+
+async function sheetsClearValuesFor(env, spreadsheetId, rangeA1) {
+  const token = await getGoogleAccessToken(env);
+  const sid = spreadsheetId;
+  if (!sid) throw new Error("Missing spreadsheetId.");
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/${encodeURIComponent(rangeA1)}:clear`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const out = await resp.json();
+  if (!resp.ok) throw new Error(`Sheets CLEAR error: ${out.error?.message || resp.status}`);
+  return out;
+}
+
+async function sheetsBatchUpdateSpreadsheet(env, spreadsheetId, requests) {
+  const token = await getGoogleAccessToken(env);
+  const sid = spreadsheetId;
+  if (!sid) throw new Error("Missing spreadsheetId.");
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sid}:batchUpdate`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ requests }),
+  });
+  const out = await resp.json();
+  if (!resp.ok) throw new Error(`Sheets batchUpdate error: ${out.error?.message || resp.status}`);
+  return out;
+}
+
+async function sheetsGetSpreadsheetMeta(env, spreadsheetId) {
+  const token = await getGoogleAccessToken(env);
+  const sid = spreadsheetId;
+  if (!sid) throw new Error("Missing spreadsheetId.");
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${sid}`);
+  url.searchParams.set("fields", "sheets.properties.title");
+  const resp = await fetch(url.toString(), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(`Sheets metadata error: ${data.error?.message || resp.status}`);
+  return data;
+}
+
 function colToA1(colNum) {
   let n = colNum;
   let s = "";
@@ -548,6 +664,35 @@ async function getDbRows(env) {
   const values = await sheetsGetValues(env, `${sheet}!${DB_RANGE_BODY}`);
   cachesState.db = { rows: values, ts: now };
   return values;
+}
+
+async function getAvg30dMap(env) {
+  const now = Date.now();
+  if (_avgCache.map && (now - _avgCache.ts) < AVG_CACHE_MS) return _avgCache.map;
+
+  const sheet = env.FLIGHT_AVG_30D_SHEET_NAME || "flight_avg_30d";
+  try {
+    const values = await sheetsGetValues(env, `${sheet}!A2:H`);
+    const map = new Map();
+    for (const row of values) {
+      const key = String(row?.[0] ?? "").trim();
+      if (!key) continue;
+      map.set(key, {
+        avgPrm30: toNumber(row?.[1]),
+        avgWchr30: toNumber(row?.[2]),
+        avgWchc30: toNumber(row?.[3]),
+        avgN30: toNumber(row?.[4]),
+      });
+    }
+    _avgCache.map = map;
+    _avgCache.ts = now;
+    return map;
+  } catch {
+    const map = new Map();
+    _avgCache.map = map;
+    _avgCache.ts = now;
+    return map;
+  }
 }
 
 // ---------- USERS lookup ----------
@@ -633,6 +778,7 @@ async function dispatchRowsImpl(env, opsDay) {
   const hdr = await getHeaderMap(env);
   const watchCol = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"] || null;
   const ackCol = hdr["Dispatch_Ack"] || null; // 1-based
+  const avgMap = await getAvg30dMap(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
   const win = operationalWindow(env, opsDay);
@@ -680,6 +826,11 @@ async function dispatchRowsImpl(env, opsDay) {
       timeChgAt: toIso(r[IX.timeChgAt], tz),
     };
 
+    const avgKey = buildFlightKey(obj.type, obj.flight);
+    const avg = avgKey ? avgMap.get(avgKey) : null;
+    obj.avgPrm30 = avg?.avgPrm30 ?? null;
+    obj.avgN30 = avg?.avgN30 ?? null;
+
     out.push([dt.getTime(), applyPatchesToRowObj(obj)]);
   }
 
@@ -708,6 +859,7 @@ async function leadRowsImpl(env, params) {
   const rows = await getDbRows(env);
   const hdr = await getHeaderMap(env);
   const watchCol = hdr["Watchlist"] || hdr["Watch List"] || hdr["Watch"] || null;
+  const avgMap = await getAvg30dMap(env);
 
   const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
   const win = operationalWindow(env, opsDay);
@@ -775,6 +927,11 @@ async function leadRowsImpl(env, params) {
       zoneFrom,
       zoneTo,
     };
+
+    const avgKey = buildFlightKey(obj.type, obj.flight);
+    const avg = avgKey ? avgMap.get(avgKey) : null;
+    obj.avgPrm30 = avg?.avgPrm30 ?? null;
+    obj.avgN30 = avg?.avgN30 ?? null;
 
     if (watchCol) obj.watchlist = String(r[watchCol - 1] ?? "");
 
@@ -1109,6 +1266,219 @@ async function ackLead(env, key, zone) {
   return { ok:true };
 }
 
+// ---------- Flight 30-day rolling averages ----------
+const DAILY_STATS_HEADER = ["date", "key", "sum_prm", "sum_wchr", "sum_wchc", "n", "updated_at"];
+const AVG_30D_HEADER = ["key", "avg_prm_30d", "avg_wchr_30d", "avg_wchc_30d", "n_30d", "window_start", "window_end", "updated_at"];
+
+async function ensureFlightStatsSheets(env) {
+  const dailySheet = env.FLIGHT_DAILY_STATS_SHEET_NAME || "flight_daily_stats";
+  const avgSheet = env.FLIGHT_AVG_30D_SHEET_NAME || "flight_avg_30d";
+  const sid = env.SPREADSHEET_ID;
+
+  const meta = await sheetsGetSpreadsheetMeta(env, sid);
+  const existing = new Set((meta.sheets || []).map(s => s.properties?.title).filter(Boolean));
+
+  const requests = [];
+  if (!existing.has(dailySheet)) requests.push({ addSheet: { properties: { title: dailySheet } } });
+  if (!existing.has(avgSheet)) requests.push({ addSheet: { properties: { title: avgSheet } } });
+  if (requests.length) await sheetsBatchUpdateSpreadsheet(env, sid, requests);
+
+  const updates = [];
+  if (!existing.has(dailySheet)) {
+    updates.push({ range: `${dailySheet}!A1:G1`, values: [DAILY_STATS_HEADER] });
+  }
+  if (!existing.has(avgSheet)) {
+    updates.push({ range: `${avgSheet}!A1:H1`, values: [AVG_30D_HEADER] });
+    updates.push({ range: `${avgSheet}!J1`, values: [["last_run_date"]] });
+  }
+  if (updates.length) await sheetsBatchUpdate(env, updates);
+}
+
+function parseArchiveHeaders(headerRow) {
+  const map = {};
+  (headerRow || []).forEach((h, idx) => {
+    const key = String(h || "").trim().toLowerCase();
+    if (key) map[key] = idx;
+  });
+  return {
+    type: map.type,
+    flight: map.flight,
+    wchr: map.wchr,
+    wchc: map.wchc,
+  };
+}
+
+async function loadArchiveDaily(env, targetDate) {
+  const archivesId = env.ARCHIVES_SPREADSHEET_ID;
+  if (!archivesId) throw new Error("Missing ARCHIVES_SPREADSHEET_ID.");
+  const values = await sheetsGetValuesFor(env, archivesId, `${targetDate}!A1:Q`);
+  if (!values.length) return { rows: [], keys: 0 };
+
+  const header = values[0];
+  const idx = parseArchiveHeaders(header);
+  if (idx.type == null || idx.flight == null || idx.wchr == null || idx.wchc == null) {
+    throw new Error(`Archive sheet ${targetDate} missing required headers.`);
+  }
+
+  const byKey = new Map();
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i] || [];
+    const type = String(row[idx.type] || "").trim();
+    const flight = String(row[idx.flight] || "").trim();
+    if (!type || !flight) continue;
+
+    const wchr = parseNumber(row[idx.wchr]);
+    const wchc = parseNumber(row[idx.wchc]);
+    const prm = wchr + wchc;
+    if (prm <= 0) continue;
+
+    const key = buildFlightKey(type, flight);
+    if (!key) continue;
+    const entry = byKey.get(key) || { sumPrm: 0, sumWchr: 0, sumWchc: 0, n: 0 };
+    entry.sumPrm += prm;
+    entry.sumWchr += wchr;
+    entry.sumWchc += wchc;
+    entry.n += 1;
+    byKey.set(key, entry);
+  }
+
+  const updatedAt = new Date().toISOString();
+  const rows = Array.from(byKey.entries()).map(([key, entry]) => ([
+    targetDate,
+    key,
+    entry.sumPrm,
+    entry.sumWchr,
+    entry.sumWchc,
+    entry.n,
+    updatedAt,
+  ]));
+  return { rows, keys: byKey.size };
+}
+
+async function updateDailyStats(env, targetDate, dailyRows, tz) {
+  const sheet = env.FLIGHT_DAILY_STATS_SHEET_NAME || "flight_daily_stats";
+  const existing = await sheetsGetValues(env, `${sheet}!A1:G`);
+  const existingRows = existing.slice(1);
+
+  const targetParts = parseYmd(targetDate);
+  const pruneDate = targetParts ? formatYmd(addDaysLocal(targetParts, -40, tz)) : "";
+
+  const kept = [];
+  for (const row of existingRows) {
+    const date = String(row?.[0] ?? "").trim();
+    const key = String(row?.[1] ?? "").trim();
+    if (!date || !key) continue;
+    if (pruneDate && date < pruneDate) continue;
+    if (date === targetDate) continue;
+    kept.push(row.slice(0, 7));
+  }
+
+  const combined = [...kept, ...dailyRows];
+  combined.sort((a, b) => {
+    const dateA = String(a?.[0] ?? "");
+    const dateB = String(b?.[0] ?? "");
+    if (dateA === dateB) return String(a?.[1] ?? "").localeCompare(String(b?.[1] ?? ""));
+    return dateA.localeCompare(dateB);
+  });
+
+  await sheetsClearValuesFor(env, env.SPREADSHEET_ID, `${sheet}!A:G`);
+  const updates = [{ range: `${sheet}!A1:G1`, values: [DAILY_STATS_HEADER] }];
+  if (combined.length) updates.push({ range: `${sheet}!A2:G`, values: combined });
+  await sheetsBatchUpdate(env, updates);
+  return combined;
+}
+
+async function updateAvg30d(env, targetDate, dailyRows, tz) {
+  const sheet = env.FLIGHT_AVG_30D_SHEET_NAME || "flight_avg_30d";
+  const targetParts = parseYmd(targetDate);
+  if (!targetParts) throw new Error(`Invalid targetDate: ${targetDate}`);
+
+  const windowStart = formatYmd(addDaysLocal(targetParts, -29, tz));
+  const windowEnd = targetDate;
+
+  const agg = new Map();
+  for (const row of dailyRows) {
+    const date = String(row?.[0] ?? "").trim();
+    if (!date || date < windowStart || date > windowEnd) continue;
+    const key = String(row?.[1] ?? "").trim();
+    if (!key) continue;
+
+    const sumPrm = parseNumber(row?.[2]);
+    const sumWchr = parseNumber(row?.[3]);
+    const sumWchc = parseNumber(row?.[4]);
+    const n = parseNumber(row?.[5]);
+    if (n <= 0) continue;
+
+    const entry = agg.get(key) || { sumPrm: 0, sumWchr: 0, sumWchc: 0, n: 0 };
+    entry.sumPrm += sumPrm;
+    entry.sumWchr += sumWchr;
+    entry.sumWchc += sumWchc;
+    entry.n += n;
+    agg.set(key, entry);
+  }
+
+  const updatedAt = new Date().toISOString();
+  const rows = Array.from(agg.entries()).map(([key, entry]) => ([
+    key,
+    Number((entry.sumPrm / entry.n).toFixed(2)),
+    Number((entry.sumWchr / entry.n).toFixed(2)),
+    Number((entry.sumWchc / entry.n).toFixed(2)),
+    entry.n,
+    windowStart,
+    windowEnd,
+    updatedAt,
+  ]));
+
+  rows.sort((a, b) => Number(b[1]) - Number(a[1]) || String(a[0]).localeCompare(String(b[0])));
+
+  await sheetsClearValuesFor(env, env.SPREADSHEET_ID, `${sheet}!A:H`);
+  const updates = [
+    { range: `${sheet}!A1:H1`, values: [AVG_30D_HEADER] },
+  ];
+  if (rows.length) updates.push({ range: `${sheet}!A2:H`, values: rows });
+  updates.push({ range: `${sheet}!J1`, values: [["last_run_date"]] });
+  updates.push({ range: `${sheet}!J2`, values: [[targetDate]] });
+  await sheetsBatchUpdate(env, updates);
+
+  _avgCache.map = null;
+  _avgCache.ts = 0;
+
+  return { rowsWritten: rows.length, keys: agg.size, windowStart, windowEnd };
+}
+
+async function runFlightAvgJob(env, targetDateOverride) {
+  const tz = env.TIMEZONE || DEFAULT_TZ;
+  const now = new Date();
+  const todayParts = getTzParts(now, tz);
+  let targetDate = targetDateOverride;
+  if (!targetDate) {
+    const targetParts = addDaysLocal({ year: todayParts.year, month: todayParts.month, day: todayParts.day }, -1, tz);
+    targetDate = formatYmd(targetParts);
+  }
+
+  await ensureFlightStatsSheets(env);
+
+  const avgSheet = env.FLIGHT_AVG_30D_SHEET_NAME || "flight_avg_30d";
+  const lastRun = await sheetsGetValues(env, `${avgSheet}!J2:J2`);
+  const lastRunDate = String(lastRun?.[0]?.[0] ?? "").trim();
+  if (!targetDateOverride && lastRunDate === targetDate) {
+    return { ok: true, skipped: true, processedDate: targetDate };
+  }
+
+  const daily = await loadArchiveDaily(env, targetDate);
+  const dailyRows = await updateDailyStats(env, targetDate, daily.rows, tz);
+  const avg = await updateAvg30d(env, targetDate, dailyRows, tz);
+
+  return {
+    ok: true,
+    processedDate: targetDate,
+    rowsWritten: avg.rowsWritten,
+    keys: daily.keys,
+    windowStart: avg.windowStart,
+    windowEnd: avg.windowEnd,
+  };
+}
+
 // ---------- Router ----------
 export default {
   async fetch(req, env, ctx) {
@@ -1204,11 +1574,28 @@ export default {
         return withCors(json(out), origin);
       }
 
+      if (path === "/jobs/flight-avg/run" && req.method === "GET") {
+        await requireAuth(req, env, "mgmt");
+        const date = String(url.searchParams.get("date") || "").trim();
+        if (date && !parseYmd(date)) {
+          return withCors(json({ ok:false, error:"Invalid date format. Use YYYY-MM-DD." }, { status: 400 }), origin);
+        }
+        const out = await runFlightAvgJob(env, date || null);
+        return withCors(json(out), origin);
+      }
+
       return withCors(json({ ok:false, error:"Not found" }, { status: 404 }), origin);
 
     } catch (err) {
       const msg = (err && err.message) ? err.message : String(err);
       return withCors(json({ ok:false, error: msg }, { status: /missing authorization|unauthorized|expired|no access/i.test(msg) ? 401 : 500 }), origin);
     }
+  },
+  async scheduled(event, env, ctx) {
+    const tz = env.TIMEZONE || DEFAULT_TZ;
+    const now = new Date();
+    const parts = getTzParts(now, tz);
+    if (parts.hour !== 4) return;
+    ctx.waitUntil(runFlightAvgJob(env, null));
   }
 };
