@@ -1525,6 +1525,19 @@ async function backfillFlightAvg(env, options) {
   };
 }
 
+async function updateFlightAvgForDate(env, targetDate, tz) {
+  const daily = await loadArchiveDaily(env, targetDate);
+  const dailyRows = await updateDailyStats(env, targetDate, daily.rows, tz);
+  const avg = await updateAvg30d(env, targetDate, dailyRows, tz);
+
+  return {
+    rowsWritten: avg.rowsWritten,
+    keys: daily.keys,
+    windowStart: avg.windowStart,
+    windowEnd: avg.windowEnd,
+  };
+}
+
 async function runFlightAvgJob(env, targetDateOverride) {
   const tz = env.TIMEZONE || DEFAULT_TZ;
   let targetDate = targetDateOverride;
@@ -1541,15 +1554,13 @@ async function runFlightAvgJob(env, targetDateOverride) {
     return { ok: true, skipped: true, processedDate: targetDate };
   }
 
-  const daily = await loadArchiveDaily(env, targetDate);
-  const dailyRows = await updateDailyStats(env, targetDate, daily.rows, tz);
-  const avg = await updateAvg30d(env, targetDate, dailyRows, tz);
+  const avg = await updateFlightAvgForDate(env, targetDate, tz);
 
   return {
     ok: true,
     processedDate: targetDate,
     rowsWritten: avg.rowsWritten,
-    keys: daily.keys,
+    keys: avg.keys,
     windowStart: avg.windowStart,
     windowEnd: avg.windowEnd,
   };
@@ -1682,10 +1693,24 @@ export default {
     }
   },
   async scheduled(event, env, ctx) {
-    const tz = env.TIMEZONE || DEFAULT_TZ;
+    const tz = "America/Toronto";
     const now = new Date();
     const parts = getTzParts(now, tz);
     if (parts.hour !== 4) return;
-    ctx.waitUntil(runFlightAvgJob(env, null));
+
+    const targetDate = formatYmd(addDaysLocal({
+      year: parts.year,
+      month: parts.month,
+      day: parts.day,
+    }, -1, tz));
+
+    await ensureFlightStatsSheets(env);
+
+    const avgSheet = env.FLIGHT_AVG_30D_SHEET_NAME || "flight_avg_30d";
+    const lastRun = await sheetsGetValues(env, `${avgSheet}!J2:J2`);
+    const lastRunDate = String(lastRun?.[0]?.[0] ?? "").trim();
+    if (lastRunDate === targetDate) return;
+
+    ctx.waitUntil(updateFlightAvgForDate(env, targetDate, tz));
   }
 };
