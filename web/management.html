@@ -64,6 +64,7 @@
       <div class="avgJobRow">
         <button onclick="runAvgJobNow()">Run Avg Job Now</button>
         <input id="avgJobDate" type="date" aria-label="Average job date" />
+        <button id="avgBackfillBtn" onclick="runBackfill()">Backfill 30 days</button>
       </div>
       <div id="avgJobStatus" class="avgJobStatus"></div>
     </div>
@@ -294,6 +295,42 @@
       } catch (err) {
         const msg = err && err.message ? err.message : String(err);
         setAvgJobStatus(`❌ ${msg}`);
+      }
+    }
+
+    async function runBackfill(){
+      const token = getToken();
+      if (!token) return hardRedirectToLogin();
+      const button = document.getElementById("avgBackfillBtn");
+      if (button) button.disabled = true;
+      setAvgJobStatus("Running backfill…");
+      try {
+        const url = new URL(API_BASE + "/jobs/flight-avg/backfill");
+        url.searchParams.set("days", "30");
+        const res = await fetch(url.toString(), {
+          headers: { "authorization": "Bearer " + token }
+        });
+        if (res.status === 401 || res.status === 403) {
+          return logout();
+        }
+        let data = null;
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          data = await res.json();
+        }
+        if (!res.ok || (data && data.ok === false)) {
+          const errMsg = (data && (data.error || data.message)) || `Request failed (${res.status})`;
+          setAvgJobStatus(`❌ ${errMsg}`);
+          return;
+        }
+        const processed = data && typeof data.datesProcessed === "number" ? data.datesProcessed : 0;
+        setAvgJobStatus(`✅ Backfill complete (processed ${processed} days)`);
+        await load();
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        setAvgJobStatus(`❌ ${msg}`);
+      } finally {
+        if (button) button.disabled = false;
       }
     }
 

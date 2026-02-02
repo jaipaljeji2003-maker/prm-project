@@ -1446,14 +1446,90 @@ async function updateAvg30d(env, targetDate, dailyRows, tz) {
   return { rowsWritten: rows.length, keys: agg.size, windowStart, windowEnd };
 }
 
-async function runFlightAvgJob(env, targetDateOverride) {
-  const tz = env.TIMEZONE || DEFAULT_TZ;
+function getDefaultTargetDate(tz) {
   const now = new Date();
   const todayParts = getTzParts(now, tz);
+  const targetParts = addDaysLocal({ year: todayParts.year, month: todayParts.month, day: todayParts.day }, -1, tz);
+  return formatYmd(targetParts);
+}
+
+async function writeDailyStatsSheet(env, rows) {
+  const sheet = env.FLIGHT_DAILY_STATS_SHEET_NAME || "flight_daily_stats";
+  await sheetsClearValuesFor(env, env.SPREADSHEET_ID, `${sheet}!A:G`);
+  const updates = [{ range: `${sheet}!A1:G1`, values: [DAILY_STATS_HEADER] }];
+  if (rows.length) updates.push({ range: `${sheet}!A2:G`, values: rows });
+  await sheetsBatchUpdate(env, updates);
+}
+
+async function backfillFlightAvg(env, options) {
+  const tz = env.TIMEZONE || DEFAULT_TZ;
+  const daysRaw = parseInt(options?.days ?? "", 10);
+  const days = Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 60);
+  const endDate = options?.endDate || getDefaultTargetDate(tz);
+  const endParts = parseYmd(endDate);
+  if (!endParts) throw new Error("Invalid end date format. Use YYYY-MM-DD.");
+
+  await ensureFlightStatsSheets(env);
+
+  const dailySheet = env.FLIGHT_DAILY_STATS_SHEET_NAME || "flight_daily_stats";
+  const existing = await sheetsGetValues(env, `${dailySheet}!A1:G`);
+  const existingRows = existing.slice(1).map(row => row.slice(0, 7));
+  const existingDates = new Set(
+    existingRows.map(row => String(row?.[0] ?? "").trim()).filter(Boolean)
+  );
+
+  const combined = [...existingRows];
+  const startParts = addDaysLocal(endParts, -(days - 1), tz);
+
+  let datesProcessed = 0;
+  let datesSkipped = 0;
+  for (let i = 0; i < days; i++) {
+    const date = formatYmd(addDaysLocal(startParts, i, tz));
+    if (existingDates.has(date)) {
+      datesSkipped += 1;
+      continue;
+    }
+    const daily = await loadArchiveDaily(env, date);
+    if (daily.rows.length) {
+      combined.push(...daily.rows);
+    }
+    datesProcessed += 1;
+  }
+
+  const pruneDate = formatYmd(addDaysLocal(endParts, -40, tz));
+  const pruned = combined.filter(row => {
+    const date = String(row?.[0] ?? "").trim();
+    const key = String(row?.[1] ?? "").trim();
+    if (!date || !key) return false;
+    return date >= pruneDate;
+  });
+
+  pruned.sort((a, b) => {
+    const dateA = String(a?.[0] ?? "");
+    const dateB = String(b?.[0] ?? "");
+    if (dateA === dateB) return String(a?.[1] ?? "").localeCompare(String(b?.[1] ?? ""));
+    return dateA.localeCompare(dateB);
+  });
+
+  await writeDailyStatsSheet(env, pruned);
+  const avg = await updateAvg30d(env, endDate, pruned, tz);
+
+  return {
+    ok: true,
+    windowStart: avg.windowStart,
+    windowEnd: avg.windowEnd,
+    datesProcessed,
+    datesSkipped,
+    rowsWrittenAvg: avg.rowsWritten,
+    dailyRowsTotal: pruned.length,
+  };
+}
+
+async function runFlightAvgJob(env, targetDateOverride) {
+  const tz = env.TIMEZONE || DEFAULT_TZ;
   let targetDate = targetDateOverride;
   if (!targetDate) {
-    const targetParts = addDaysLocal({ year: todayParts.year, month: todayParts.month, day: todayParts.day }, -1, tz);
-    targetDate = formatYmd(targetParts);
+    targetDate = getDefaultTargetDate(tz);
   }
 
   await ensureFlightStatsSheets(env);
@@ -1581,6 +1657,20 @@ export default {
           return withCors(json({ ok:false, error:"Invalid date format. Use YYYY-MM-DD." }, { status: 400 }), origin);
         }
         const out = await runFlightAvgJob(env, date || null);
+        return withCors(json(out), origin);
+      }
+
+      if (path === "/jobs/flight-avg/backfill" && req.method === "GET") {
+        await requireAuth(req, env, "mgmt");
+        const daysParam = String(url.searchParams.get("days") || "").trim();
+        const endParam = String(url.searchParams.get("end") || "").trim();
+        if (endParam && !parseYmd(endParam)) {
+          return withCors(json({ ok:false, error:"Invalid end date format. Use YYYY-MM-DD." }, { status: 400 }), origin);
+        }
+        const out = await backfillFlightAvg(env, {
+          days: daysParam || null,
+          endDate: endParam || null,
+        });
         return withCors(json(out), origin);
       }
 
