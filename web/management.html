@@ -31,6 +31,13 @@
     .scrollX {
       overflow-x: auto;
     }
+    .tableTitle {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #666;
+      padding: 10px 12px 0;
+    }
   </style>
 </head>
 <body>
@@ -91,19 +98,13 @@
     </div>
   </div>
 
-  <div class="tableWrap tight scrollX" style="margin-top: 12px;">
-    <table id="heatTable">
-      <thead></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
   <div class="tableWrap" style="margin-top: 12px;">
-    <table id="flightTable">
+    <div class="tableTitle">Top 10 Flights (Highest PRM)</div>
+    <table id="topFlightsTable">
       <thead>
         <tr>
-          <th>Plan</th><th>EST</th><th>Flight</th><th>Type</th><th>Gate</th><th>Zone</th>
-          <th>WCHR</th><th>WCHC</th><th>PRM</th>
+          <th>Rank</th><th>Flight</th><th>Type</th><th>Gate</th><th>Zone</th>
+          <th>Plan</th><th>EST</th><th>WCHR</th><th>WCHC</th><th>PRM</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -288,64 +289,70 @@
       }
     }
 
-    function renderHeatMatrix(data){
-      const zones = data.zones || [];
-      const thead = document.querySelector("#heatTable thead");
-      const tbody = document.querySelector("#heatTable tbody");
-      thead.innerHTML = "";
-      tbody.innerHTML = "";
-
-      const headRow = document.createElement("tr");
-      const thBucket = document.createElement("th");
-      thBucket.textContent = "Plan";
-      headRow.appendChild(thBucket);
-      zones.forEach(zone => {
-        const th = document.createElement("th");
-        th.textContent = zone;
-        headRow.appendChild(th);
-      });
-      const thTotal = document.createElement("th");
-      thTotal.textContent = "Total";
-      headRow.appendChild(thTotal);
-      thead.appendChild(headRow);
-
-      if (!data.heatRows || !data.heatRows.length) {
-        const tr = document.createElement("tr");
-        const td = document.createElement("td");
-        td.colSpan = zones.length + 2;
-        td.className = "empty";
-        td.textContent = "No pre-alerts for this filter.";
-        tr.appendChild(td);
-        tbody.appendChild(tr);
-        return;
-      }
-
-      data.heatRows.forEach(row => {
-        const tr = document.createElement("tr");
-        const tdBucket = document.createElement("td");
-        tdBucket.textContent = row.bucket;
-        tr.appendChild(tdBucket);
-        zones.forEach(zone => {
-          const td = document.createElement("td");
-          td.className = "num";
-          td.textContent = row.byZone[zone] || 0;
-          tr.appendChild(td);
-        });
-        const tdTotal = document.createElement("td");
-        tdTotal.className = "num";
-        tdTotal.textContent = row.total || 0;
-        tr.appendChild(tdTotal);
-        tbody.appendChild(tr);
-      });
+    function parseCount(val){
+      const n = Number(val || 0);
+      return Number.isFinite(n) ? n : 0;
     }
 
-    function renderFlights(data){
-      const tbody = document.querySelector("#flightTable tbody");
+    function earliestTime(current, candidate){
+      if (!candidate) return current;
+      if (!current) return candidate;
+      return candidate < current ? candidate : current;
+    }
+
+    function buildTopFlights(flights){
+      const grouped = new Map();
+      (flights || []).forEach(row => {
+        const flight = row.flight || "";
+        const type = row.type || "";
+        const gate = row.gate || "";
+        const zone = row.zone || "";
+        const key = gate && zone ? `${flight}|${type}|${gate}|${zone}` : `${flight}|${type}`;
+        let entry = grouped.get(key);
+        if (!entry) {
+          entry = {
+            flight,
+            type,
+            gate,
+            zone,
+            plan: "",
+            est: "",
+            wchr: 0,
+            wchc: 0,
+          };
+          grouped.set(key, entry);
+        }
+        entry.plan = earliestTime(entry.plan, row.plan || "");
+        entry.est = earliestTime(entry.est, row.est || "");
+        entry.wchr += parseCount(row.wchr);
+        entry.wchc += parseCount(row.wchc);
+      });
+
+      const rows = Array.from(grouped.values()).map(entry => ({
+        ...entry,
+        prm: entry.wchr + entry.wchc,
+        plan: entry.plan || "—",
+        est: entry.est || "—",
+        gate: entry.gate || "—",
+        zone: entry.zone || "—",
+      }));
+
+      rows.sort((a, b) => {
+        if (b.prm !== a.prm) return b.prm - a.prm;
+        return a.flight.localeCompare(b.flight);
+      });
+
+      return rows.slice(0, 10);
+    }
+
+    function renderTopFlights(data){
+      const tbody = document.querySelector("#topFlightsTable tbody");
       tbody.innerHTML = "";
-      if (!data.flights || !data.flights.length) {
+      const rows = buildTopFlights(data.flights);
+      if (!rows.length) {
         const tr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = 9;
+        td.colSpan = 10;
         td.className = "empty";
         td.textContent = "No flights for this filter.";
         tr.appendChild(td);
@@ -353,12 +360,23 @@
         return;
       }
 
-      data.flights.forEach(row => {
+      rows.forEach((row, index) => {
         const tr = document.createElement("tr");
-        const cells = [row.plan, row.est, row.flight, row.type, row.gate, row.zone, row.wchr, row.wchc, row.prm];
+        const cells = [
+          index + 1,
+          row.flight,
+          row.type,
+          row.gate,
+          row.zone,
+          row.plan,
+          row.est,
+          row.wchr,
+          row.wchc,
+          row.prm,
+        ];
         cells.forEach((val, idx) => {
           const td = document.createElement("td");
-          if (idx >= 6) td.className = "num";
+          if (idx === 0 || idx >= 7) td.className = "num";
           td.textContent = val;
           tr.appendChild(td);
         });
@@ -394,8 +412,7 @@
         updateZoneControls();
         renderSummary(data);
         renderCharts(data);
-        renderHeatMatrix(data);
-        renderFlights(data);
+        renderTopFlights(data);
       } catch (err) {
         setErr(err && err.message ? err.message : String(err));
       } finally {
