@@ -38,12 +38,35 @@
       color: #666;
       padding: 10px 12px 0;
     }
+    .avgJobControls {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .avgJobRow {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .avgJobStatus {
+      font-size: 12px;
+      color: #555;
+      min-height: 16px;
+    }
   </style>
 </head>
 <body>
   <div class="topbar">
     <button onclick="manualRefresh()">Refresh</button>
     <button onclick="logout()">Logout</button>
+    <div class="avgJobControls">
+      <div class="avgJobRow">
+        <button onclick="runAvgJobNow()">Run Avg Job Now</button>
+        <input id="avgJobDate" type="date" aria-label="Average job date" />
+      </div>
+      <div id="avgJobStatus" class="avgJobStatus"></div>
+    </div>
 
     <div class="filters">
       <span>Bucket</span>
@@ -207,6 +230,71 @@
 
     function manualRefresh(){
       load();
+    }
+
+    function getTorontoYmd(offsetDays){
+      const formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Toronto",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const parts = formatter.formatToParts(new Date());
+      const year = Number(parts.find(p => p.type === "year")?.value);
+      const month = Number(parts.find(p => p.type === "month")?.value);
+      const day = Number(parts.find(p => p.type === "day")?.value);
+      const base = new Date(Date.UTC(year, month - 1, day));
+      base.setUTCDate(base.getUTCDate() + (offsetDays || 0));
+      const yyyy = base.getUTCFullYear();
+      const mm = String(base.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(base.getUTCDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    function setAvgJobStatus(message){
+      const el = document.getElementById("avgJobStatus");
+      if (el) el.textContent = message || "";
+    }
+
+    function initAvgJobControls(){
+      const input = document.getElementById("avgJobDate");
+      if (input && !input.value) {
+        input.value = getTorontoYmd(-1);
+      }
+    }
+
+    async function runAvgJobNow(){
+      const token = getToken();
+      if (!token) return hardRedirectToLogin();
+      const input = document.getElementById("avgJobDate");
+      const date = input && input.value ? input.value : getTorontoYmd(-1);
+      if (input && !input.value) input.value = date;
+      setAvgJobStatus("Running…");
+      try {
+        const url = new URL(API_BASE + "/jobs/flight-avg/run");
+        url.searchParams.set("date", date);
+        const res = await fetch(url.toString(), {
+          headers: { "authorization": "Bearer " + token }
+        });
+        if (res.status === 401 || res.status === 403) {
+          return logout();
+        }
+        let data = null;
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          data = await res.json();
+        }
+        if (!res.ok || (data && data.ok === false)) {
+          const errMsg = (data && (data.error || data.message)) || `Request failed (${res.status})`;
+          setAvgJobStatus(`❌ ${errMsg}`);
+          return;
+        }
+        setAvgJobStatus(`✅ Updated averages for ${date}`);
+        await load();
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        setAvgJobStatus(`❌ ${msg}`);
+      }
     }
 
     function fmtWindow(iso){
@@ -423,6 +511,7 @@
     async function boot(){
       const token = getToken();
       if (!token) return hardRedirectToLogin();
+      initAvgJobControls();
       try {
         const res = await fetch(API_BASE + "/auth/validate?app=mgmt", {
           headers: { "authorization": "Bearer " + token }
