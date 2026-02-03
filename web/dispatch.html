@@ -39,7 +39,7 @@
         <th>Flight</th><th>Type</th><th>Time (Est)</th><th>Time Δ</th><th>Sched</th>
         <th>Origin/Dest</th><th>Gate</th><th>Zone</th><th>Alert</th>
         <th>WCHR</th><th>WCHC</th><th>Avg PRM (30d)</th><th>Comment</th>
-        <th>Assignment</th><th>Pax</th><th>Ack</th>
+        <th>Assignment</th><th>Pax</th><th>Scanned</th><th>Ack</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -87,7 +87,7 @@
 
     function isOpsDayToggleWindow() {
       const p = getTorontoParts();
-      return p.hour < 4;
+      return p.hour < 3;
     }
 
     function initOpsDayControl() {
@@ -285,6 +285,10 @@
 
           <td>${escapeHtml(r.assignment || "")}</td>
           <td>${escapeHtml(r.pax || "")}</td>
+          <td class="mono">
+            ${escapeHtml(r.scanned_count ?? 0)}
+            ${r.scan_rate != null ? `<div class="small muted">${Math.round(r.scan_rate * 100)}%</div>` : ``}
+          </td>
 
           <td><button onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
