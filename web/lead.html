@@ -57,7 +57,7 @@
         <tr>
           <th>Watch</th><th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
           <th>WCHR</th><th>WCHC</th><th>Avg PRM (30d)</th><th>Alert</th>
-          <th>Assignment</th><th>Pax</th><th>Scanned</th><th>Ack</th>
+          <th>Assignment</th><th>Pax</th><th>Ack</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -207,7 +207,7 @@
 
     function isOpsDayToggleWindow() {
       const p = getTorontoParts();
-      return p.hour < 3;
+      return p.hour < 4;
     }
 
     function initOpsDayControl() {
@@ -421,7 +421,7 @@
 
       if (!filtered.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="empty" colspan="14">No flights match the current filters.</td>`;
+        tr.innerHTML = `<td class="empty" colspan="13">No flights match the current filters.</td>`;
         tb.appendChild(tr);
         return;
       }
@@ -459,10 +459,6 @@
           <td class="alert">${escapeHtml(r.alert || "")}</td>
           <td><input class="cell-input" data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
           <td><input class="cell-input num" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
-          <td class="mono">
-            ${escapeHtml(r.scanned_count ?? 0)}
-            ${r.scan_rate != null ? `<div class="small muted">${Math.round(r.scan_rate * 100)}%</div>` : ``}
-          </td>
           <td><button class="quiet" onclick="ack('${escapeAttr(r.key)}')">Ack</button></td>
         `;
 
