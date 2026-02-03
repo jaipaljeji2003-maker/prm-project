@@ -34,8 +34,10 @@ th { position: sticky; top: 0; background: #f7f7f7; z-index: 2; text-transform: 
 tbody tr:nth-child(even) { background: #fcfcfc; }
 
 .small { font-size: 12px; color:#333; }
+.muted { color:#666; }
 .alert { font-weight: 700; }
 .num { text-align: center; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; text-align: center; }
 .cell-input { width: 100%; }
 .watchCell { text-align: center; }
 .watch-toggle { transform: scale(1.1); }

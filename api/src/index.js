@@ -31,6 +31,7 @@ const IDX_CACHE_MS = 30_000;
 const USERS_CACHE_MS = 120_000;
 const ROW_CACHE_MS = 1_000;
 const AVG_CACHE_MS = 10 * 60_000;
+const PRMGO_CACHE_MS = 30_000;
 
 const DEFAULT_TZ = "America/Toronto";
 
@@ -47,6 +48,8 @@ const ZONE_ACK_COL = {
 const _rowCache = new Map();
 const _rowInflight = new Map();
 const _avgCache = { map: null, ts: 0 };
+const _prmgoRowsCache = { rows: null, ts: 0 };
+const _prmgoCountsCache = new Map();
 
 // Sheets remain the single source of truth; this short cache only smooths bursty reads.
 async function cachedRows(key, fn) {
@@ -133,6 +136,24 @@ function buildFlightKey(type, flight) {
   const f = normalizeFlightNorm(flight);
   if (!t || !f) return "";
   return `${t}|${f}`;
+}
+
+function inferTerminalFromRow(obj) {
+  const gate = String(obj?.gate || "").trim().toUpperCase();
+  if (/^[ABC]/.test(gate)) return "T3";
+  if (/^[DEF]/.test(gate)) return "T1";
+
+  const zone = String(obj?.zone || "").trim().toUpperCase();
+  if (zone.includes("T1")) return "T1";
+  if (zone.includes("T3")) return "T3";
+  return "";
+}
+
+function parseFlightParts(flight) {
+  const cleaned = String(flight || "").toUpperCase().replace(/\s+/g, "");
+  const match = cleaned.match(/^([A-Z]+)([0-9]+)$/);
+  if (!match) return { airline: "", flightNumber: "", cleaned };
+  return { airline: match[1], flightNumber: match[2], cleaned };
 }
 
 function formatYmd({ year, month, day }) {
@@ -290,14 +311,14 @@ function computeOpsWindowToronto(mode = "current", now = new Date()) {
   const p = getTzParts(now, tz);
 
   let opDate = { year: p.year, month: p.month, day: p.day };
-  if (p.hour < 4) opDate = addDaysLocal(opDate, -1, tz);
+  if (p.hour < 3) opDate = addDaysLocal(opDate, -1, tz);
 
   const opsMode = normalizeOpsDay(mode);
   if (opsMode === "next") opDate = addDaysLocal(opDate, 1, tz);
 
-  const opStartUtc = zonedTimeToUtc({ ...opDate, hour: 4, minute: 0, second: 0 }, tz);
+  const opStartUtc = zonedTimeToUtc({ ...opDate, hour: 3, minute: 0, second: 0 }, tz);
   const opEndDate = addDaysLocal(opDate, 1, tz);
-  const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: 3, minute: 59, second: 59 }, tz);
+  const opEndUtc = zonedTimeToUtc({ ...opEndDate, hour: 2, minute: 59, second: 59 }, tz);
   opEndUtc.setUTCMilliseconds(999);
 
   let start = opStartUtc;
@@ -307,6 +328,7 @@ function computeOpsWindowToronto(mode = "current", now = new Date()) {
   return {
     start,
     end: opEndUtc,
+    opsDateYmd: formatYmd(opDate),
     startISO: start.toISOString(),
     endISO: opEndUtc.toISOString(),
     startMs: start.getTime(),
@@ -318,11 +340,11 @@ function computeMgmtWindowToronto(now = new Date()) {
   const tz = DEFAULT_TZ;
   const p = getTzParts(now, tz);
   let opDate = { year: p.year, month: p.month, day: p.day };
-  if (p.hour < 4) opDate = addDaysLocal(opDate, -1, tz);
+  if (p.hour < 3) opDate = addDaysLocal(opDate, -1, tz);
 
-  const startUtc = zonedTimeToUtc({ ...opDate, hour: 2, minute: 0, second: 0 }, tz);
+  const startUtc = zonedTimeToUtc({ ...opDate, hour: 1, minute: 0, second: 0 }, tz);
   const endDate = addDaysLocal(opDate, 1, tz);
-  const endUtc = zonedTimeToUtc({ ...endDate, hour: 3, minute: 59, second: 59 }, tz);
+  const endUtc = zonedTimeToUtc({ ...endDate, hour: 2, minute: 59, second: 59 }, tz);
   endUtc.setUTCMilliseconds(999);
 
   return {
@@ -695,6 +717,72 @@ async function getAvg30dMap(env) {
   }
 }
 
+async function listPrmgoFlightCountsRows(env) {
+  const now = Date.now();
+  if (_prmgoRowsCache.rows && (now - _prmgoRowsCache.ts) < PRMGO_CACHE_MS) return _prmgoRowsCache.rows;
+
+  const sheetId = env.DB_SHEET_ID || env.SPREADSHEET_ID;
+  if (!sheetId) throw new Error("Missing DB_SHEET_ID/SPREADSHEET_ID.");
+
+  const values = await sheetsGetValuesFor(env, sheetId, "PRMGO_FlightCounts!A1:G");
+  _prmgoRowsCache.rows = values;
+  _prmgoRowsCache.ts = now;
+  return values;
+}
+
+async function getPrmgoCountsMap(env, opsMode) {
+  const opsWindow = computeOpsWindowToronto(opsMode);
+  const opsDateYmd = opsWindow.opsDateYmd;
+  const now = Date.now();
+
+  const cached = _prmgoCountsCache.get(opsDateYmd);
+  if (cached && (now - cached.ts) < PRMGO_CACHE_MS) return cached.map;
+
+  const rows = await listPrmgoFlightCountsRows(env);
+  const map = new Map();
+
+  const hdr = (rows[0] || []).map(x => String(x || "").trim().toLowerCase());
+  const ixOpsDate = hdr.indexOf("ops_date");
+  const ixDirection = hdr.indexOf("direction");
+  const ixTerminal = hdr.indexOf("terminal");
+  const ixAirline = hdr.indexOf("airline");
+  const ixFlight = hdr.indexOf("flight");
+  const ixScanned = hdr.indexOf("scanned_count");
+  const ixUpdated = hdr.indexOf("last_updated_toronto");
+
+  if ([ixOpsDate, ixDirection, ixTerminal, ixAirline, ixFlight, ixScanned].some(ix => ix < 0)) {
+    _prmgoCountsCache.set(opsDateYmd, { map, ts: now });
+    return map;
+  }
+
+  const tz = env.TIMEZONE || DEFAULT_TZ;
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const opsDate = parseDbTime(row[ixOpsDate], tz);
+    if (!opsDate) continue;
+
+    const rowYmd = formatYmd(getTzParts(opsDate, tz));
+    if (rowYmd !== opsDateYmd) continue;
+
+    const direction = normalizeType(row[ixDirection]);
+    const terminal = String(row[ixTerminal] ?? "").trim().toUpperCase();
+    const airline = String(row[ixAirline] ?? "").trim().toUpperCase();
+    const flightNumber = String(row[ixFlight] ?? "").trim().replace(/\D/g, "");
+    if (!direction || !terminal || !airline || !flightNumber) continue;
+
+    const scannedRaw = toNumber(row[ixScanned]);
+    const scannedCount = Number.isFinite(scannedRaw) ? Math.round(scannedRaw) : 0;
+    const lastUpdated = row[ixUpdated] ?? "";
+    const key = `${opsDateYmd}|${direction}|${terminal}|${airline}${flightNumber}`;
+
+    map.set(key, { scanned_count: scannedCount, last_updated_toronto: lastUpdated });
+  }
+
+  _prmgoCountsCache.set(opsDateYmd, { map, ts: now });
+  return map;
+}
+
 // ---------- USERS lookup ----------
 async function getUsers(env) {
   const now = Date.now();
@@ -782,6 +870,8 @@ async function dispatchRowsImpl(env, opsDay) {
 
   const tz = env.TIMEZONE || DEFAULT_TZ;
   const win = operationalWindow(env, opsDay);
+  const opsDateYmd = win.opsDateYmd;
+  const countsMap = await getPrmgoCountsMap(env, opsDay);
 
   const out = []; // store [timeMs, rowObj] so sort is cheap
   for (const r of rows) {
@@ -831,6 +921,15 @@ async function dispatchRowsImpl(env, opsDay) {
     obj.avgPrm30 = avg?.avgPrm30 ?? null;
     obj.avgN30 = avg?.avgN30 ?? null;
 
+    const terminal = inferTerminalFromRow(obj);
+    const { airline, flightNumber, cleaned } = parseFlightParts(obj.flight);
+    const flightStr = airline && flightNumber ? `${airline}${flightNumber}` : cleaned;
+    const countsKey = `${opsDateYmd}|${normalizeType(obj.type)}|${terminal}|${flightStr}`;
+    const counts = countsMap.get(countsKey);
+    obj.scanned_count = counts?.scanned_count ?? 0;
+    const paxValue = toNumber(obj.pax);
+    obj.scan_rate = (paxValue && paxValue > 0) ? (obj.scanned_count / paxValue) : null;
+
     out.push([dt.getTime(), applyPatchesToRowObj(obj)]);
   }
 
@@ -863,6 +962,8 @@ async function leadRowsImpl(env, params) {
 
   const tz = env.TIMEZONE || DEFAULT_TZ;   // moved OUT of the loop
   const win = operationalWindow(env, opsDay);
+  const opsDateYmd = win.opsDateYmd;
+  const countsMap = await getPrmgoCountsMap(env, opsDay);
 
   const ackColName = (zoneWanted !== "ALL")
     ? (ZONE_ACK_COL[String(zoneWanted).toUpperCase()] || null)
@@ -932,6 +1033,15 @@ async function leadRowsImpl(env, params) {
     const avg = avgKey ? avgMap.get(avgKey) : null;
     obj.avgPrm30 = avg?.avgPrm30 ?? null;
     obj.avgN30 = avg?.avgN30 ?? null;
+
+    const terminal = inferTerminalFromRow(obj);
+    const { airline, flightNumber, cleaned } = parseFlightParts(obj.flight);
+    const flightStr = airline && flightNumber ? `${airline}${flightNumber}` : cleaned;
+    const countsKey = `${opsDateYmd}|${normalizeType(obj.type)}|${terminal}|${flightStr}`;
+    const counts = countsMap.get(countsKey);
+    obj.scanned_count = counts?.scanned_count ?? 0;
+    const paxValue = toNumber(obj.pax);
+    obj.scan_rate = (paxValue && paxValue > 0) ? (obj.scanned_count / paxValue) : null;
 
     if (watchCol) obj.watchlist = String(r[watchCol - 1] ?? "");
 
