@@ -56,7 +56,7 @@
       <thead>
         <tr>
           <th>Watch</th><th>Flight</th><th>Type</th><th>Time</th><th>Gate</th><th>Zone</th>
-          <th>WCHR</th><th>WCHC</th><th>Avg PRM (30d)</th><th>Alert</th>
+          <th>WCHR</th><th>WCHC</th><th>Alert</th>
           <th>Assignment</th><th>Pax</th><th>Ack</th>
         </tr>
       </thead>
@@ -177,11 +177,6 @@
       const d = new Date(dt);
       if (isNaN(d.getTime())) return String(dt);
       return d.toLocaleTimeString(undefined, { hour:"2-digit", minute:"2-digit", hour12:false });
-    }
-
-    function formatAvgPrm(v) {
-      const n = Number(v);
-      return Number.isFinite(n) ? n.toFixed(1) : "—";
     }
 
     function normalizeFlightQ(s) { return String(s || "").toUpperCase().replace(/\s+/g, ""); }
@@ -421,7 +416,7 @@
 
       if (!filtered.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td class="empty" colspan="13">No flights match the current filters.</td>`;
+        tr.innerHTML = `<td class="empty" colspan="12">No flights match the current filters.</td>`;
         tb.appendChild(tr);
         return;
       }
@@ -455,7 +450,6 @@
           <td>${escapeHtml(r.zone || "")}</td>
           <td class="num">${escapeHtml(r.wchr || "")}</td>
           <td class="num">${escapeHtml(r.wchc || "")}</td>
-          <td class="num">${escapeHtml(formatAvgPrm(r.avgPrm30))}</td>
           <td class="alert">${escapeHtml(r.alert || "")}</td>
           <td><input class="cell-input" data-key="${escapeAttr(r.key)}" data-field="assignment" value="${escapeAttr(r.assignment || "")}" /></td>
           <td><input class="cell-input num" data-key="${escapeAttr(r.key)}" data-field="pax" value="${escapeAttr(r.pax || "")}" /></td>
