@@ -38,7 +38,7 @@
       <tr>
         <th>Flight</th><th>Type</th><th>Time (Est)</th><th>Time Δ</th><th>Sched</th>
         <th>Origin/Dest</th><th>Gate</th><th>Zone</th><th>Alert</th>
-        <th>WCHR</th><th>WCHC</th><th>Avg PRM (30d)</th><th>Comment</th>
+        <th>WCHR</th><th>WCHC</th><th>Comment</th>
         <th>Assignment</th><th>Pax</th><th>Ack</th>
       </tr>
     </thead>
@@ -186,10 +186,6 @@
 
     function pickPrev(r){ return (r.timePrev || ""); }
     function pickDelta(r){ return (r.timeDelta || ""); }
-    function formatAvgPrm(v) {
-      const n = Number(v);
-      return Number.isFinite(n) ? n.toFixed(1) : "—";
-    }
 
     function setFilter(t) {
       filterType = t;
@@ -280,7 +276,6 @@
 
           <td><input data-key="${escapeAttr(r.key)}" data-field="wchr" value="${escapeAttr(r.wchr || "")}" /></td>
           <td><input data-key="${escapeAttr(r.key)}" data-field="wchc" value="${escapeAttr(r.wchc || "")}" /></td>
-          <td class="num">${escapeHtml(formatAvgPrm(r.avgPrm30))}</td>
           <td><textarea data-key="${escapeAttr(r.key)}" data-field="comment">${escapeHtml(r.comment || "")}</textarea></td>
 
           <td>${escapeHtml(r.assignment || "")}</td>
