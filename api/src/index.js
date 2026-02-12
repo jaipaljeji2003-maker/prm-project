@@ -45,6 +45,39 @@ const ZONE_ACK_COL = {
 
 const _rowCache = new Map();
 const _rowInflight = new Map();
+const GOOGLE_FETCH_TIMEOUT_MS = 12_000;
+const INFLIGHT_TIMEOUT_MS = 15_000;
+
+function withTimeout(promise, timeoutMs, label, onTimeout) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      try { onTimeout && onTimeout(); } catch {}
+      const err = new Error(`${label} timed out after ${timeoutMs}ms`);
+      err.name = "TimeoutError";
+      reject(err);
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+}
+
+async function fetchWithTimeout(input, init = {}, timeoutMs = GOOGLE_FETCH_TIMEOUT_MS, label = "fetch") {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      console.warn(`[timeout] ${label} exceeded ${timeoutMs}ms`);
+      const timeoutErr = new Error(`${label} timed out after ${timeoutMs}ms`);
+      timeoutErr.name = "TimeoutError";
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 // Sheets remain the single source of truth; this short cache only smooths bursty reads.
 async function cachedRows(key, fn) {
@@ -59,11 +92,19 @@ async function cachedRows(key, fn) {
 
   if (_rowInflight.has(key)) return _rowInflight.get(key);
 
+  const onInflightTimeout = () => {
+    console.warn(`[timeout] row inflight cache key=${key} exceeded ${INFLIGHT_TIMEOUT_MS}ms; clearing inflight entry`);
+    _rowInflight.delete(key);
+  };
+
   const p = (async () => {
     try {
-      const val = await fn();
+      const val = await withTimeout(Promise.resolve().then(fn), INFLIGHT_TIMEOUT_MS, `cachedRows(${key})`, onInflightTimeout);
       _rowCache.set(key, { ts: Date.now(), val });
       return val;
+    } catch (err) {
+      console.warn(`[rows] cache fetch failed key=${key}: ${err && err.message ? err.message : String(err)}`);
+      throw err;
     } finally {
       _rowInflight.delete(key);
     }
@@ -430,11 +471,11 @@ async function getGoogleAccessToken(env) {
     assertion,
   });
 
-  const resp = await fetch(aud, {
+  const resp = await fetchWithTimeout(aud, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body,
-  });
+  }, GOOGLE_FETCH_TIMEOUT_MS, "google oauth token");
 
   const data = await resp.json();
   if (!resp.ok) throw new Error(`Google token error: ${data.error || resp.status}`);
@@ -453,9 +494,9 @@ async function sheetsGetValues(env, rangeA1) {
   url.searchParams.set("valueRenderOption", "UNFORMATTED_VALUE");
   url.searchParams.set("dateTimeRenderOption", "SERIAL_NUMBER");
 
-  const resp = await fetch(url.toString(), {
+  const resp = await fetchWithTimeout(url.toString(), {
     headers: { authorization: `Bearer ${token}` }
-  });
+  }, GOOGLE_FETCH_TIMEOUT_MS, "sheets values get");
   const data = await resp.json();
   if (!resp.ok) throw new Error(`Sheets GET error: ${data.error?.message || resp.status}`);
   return data.values || [];
@@ -466,14 +507,14 @@ async function sheetsBatchUpdate(env, dataRanges /* [{range, values:[[...]]}] */
   const sid = env.SPREADSHEET_ID;
 
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchUpdate?valueInputOption=USER_ENTERED`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({ data: dataRanges }),
-  });
+  }, GOOGLE_FETCH_TIMEOUT_MS, "sheets batch update");
   const out = await resp.json();
   if (!resp.ok) throw new Error(`Sheets UPDATE error: ${out.error?.message || resp.status}`);
   return out;
