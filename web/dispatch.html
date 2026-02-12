@@ -55,6 +55,7 @@
     const POLL_MS = 10_000;
     const BACKOFF_START_MS = 2_000;
     const BACKOFF_MAX_MS = 15_000;
+    const LOAD_TIMEOUT_MS = 12_000;
 
     let rows = [];
     let filterType = "ALL";
@@ -65,6 +66,7 @@
     let backoffMs = 0;
     let opsDayMode = "current";
     let opsDayEnabled = false;
+    let rowsRequestMeta = null;
 
     function getTorontoParts(date = new Date()) {
       const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -202,10 +204,26 @@
       return Date.now() < typingUntil || tag === "INPUT" || tag === "TEXTAREA";
     }
 
+    function abortRowsRequest(reason) {
+      if (!rowsRequestMeta) return;
+      rowsRequestMeta.reason = reason || "cancelled";
+      rowsRequestMeta.controller.abort();
+    }
+
     async function load(force=false) {
       if (!force && isTyping()) return true;
       const token = getToken();
       if (!token) return hardRedirectToLogin();
+
+      abortRowsRequest("superseded");
+      const controller = new AbortController();
+      const reqMeta = { controller, reason: "" };
+      rowsRequestMeta = reqMeta;
+
+      const timeoutId = setTimeout(() => {
+        reqMeta.reason = "timeout";
+        controller.abort();
+      }, LOAD_TIMEOUT_MS);
 
       setErr("");
       try {
@@ -213,7 +231,8 @@
         url.searchParams.set("opsDay", opsDayMode);
 
         const res = await fetch(url.toString(), {
-          headers: { "authorization": "Bearer " + token }
+          headers: { "authorization": "Bearer " + token },
+          signal: controller.signal,
         });
         const data = await res.json();
         if (!data || !data.ok) {
@@ -225,10 +244,22 @@
         render();
         return true;
       } catch (e) {
+        if (e && e.name === "AbortError") {
+          if (reqMeta.reason === "superseded") return true;
+          if (reqMeta.reason === "timeout") {
+            setErr("Dispatch rows request timed out after 12s. Auto-refresh will retry.");
+            return false;
+          }
+          return false;
+        }
+
         const msg = e && e.message ? e.message : String(e);
         if (/unauthorized|expired|missing token/i.test(msg)) return hardRedirectToLogin();
-        setErr(msg);
+        setErr(msg || "Unable to load dispatch rows. Auto-refresh will retry.");
         return false;
+      } finally {
+        clearTimeout(timeoutId);
+        if (rowsRequestMeta === reqMeta) rowsRequestMeta = null;
       }
     }
 
