@@ -62,6 +62,27 @@
     let typingUntil = 0;
     const saveTimers = new Map();
 
+    // Client-side write-through patches — mirrors the server's PATCH_TTL_MS.
+    // Prevents stale server/edge-cache data from overwriting a user's just-saved
+    // value when render() runs during the next poll cycle.
+    const CLIENT_PATCH_TTL_MS = 15_000;
+    const clientPatches = new Map(); // rowKey -> { fields: {...}, expAt }
+
+    function setClientPatch(key, fields) {
+      const existing = clientPatches.get(key);
+      clientPatches.set(key, {
+        fields: { ...(existing ? existing.fields : {}), ...fields },
+        expAt: Date.now() + CLIENT_PATCH_TTL_MS,
+      });
+    }
+
+    function applyClientPatches(row) {
+      const p = clientPatches.get(row.key);
+      if (!p) return row;
+      if (Date.now() > p.expAt) { clientPatches.delete(row.key); return row; }
+      return { ...row, ...p.fields };
+    }
+
     let pollTimer = null;
     let backoffMs = 0;
     let opsDayMode = "current";
@@ -300,7 +321,8 @@
         return ftOk && qOk;
       });
 
-      filtered.forEach(r => {
+      filtered.forEach(rawRow => {
+        const r = applyClientPatches(rawRow);
         const tr = document.createElement("tr");
 
         const rt = String(r.type || "").toUpperCase();
@@ -376,6 +398,11 @@
       const token = getToken();
       if (!token) return hardRedirectToLogin();
 
+      // Optimistically lock this value so the next poll render won't flicker
+      // it back to the stale server/edge-cache value.
+      setClientPatch(key, { [field]: val });
+      rows = rows.map(r => r.key === key ? { ...r, [field]: val } : r);
+
       setErr("");
       const payload = { key };
       payload[field] = val;
@@ -390,12 +417,21 @@
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        if (!data || !data.ok) setErr((data && data.error) || "Update failed");
+        if (!data || !data.ok) {
+          // Revert the optimistic patch and force a refresh so the UI
+          // shows the real state rather than a stale local value.
+          clientPatches.delete(key);
+          rows = rows.map(r => r.key === key ? { ...r, [field]: val } : r);
+          setErr((data && data.error) || "Update failed");
+          await refreshAfterAction();
+        }
+        // On success: the client patch protects the value for CLIENT_PATCH_TTL_MS.
+        // The next regular poll will confirm the saved state — no full refresh needed.
       } catch (e) {
+        clientPatches.delete(key);
         setErr(e && e.message ? e.message : String(e));
+        await refreshAfterAction();
       }
-
-      await refreshAfterAction();
     }
 
     async function ack(key) {
@@ -404,8 +440,13 @@
       if (!token) return hardRedirectToLogin();
 
       setErr("");
-      // optimistic UI
-      rows = rows.map(r => (r.key !== key) ? r : ({ ...r, alert:"", gateChanged:false, timeChanged:false, zoneChanged:false }));
+
+      const ackedFields = { alert: "", gateChanged: false, timeChanged: false, zoneChanged: false };
+
+      // Optimistic update: apply locally and lock with a client patch so the
+      // next poll render can't flicker back to the stale server/edge-cache state.
+      setClientPatch(key, ackedFields);
+      rows = rows.map(r => (r.key !== key) ? r : ({ ...r, ...ackedFields }));
       render();
 
       try {
@@ -418,12 +459,19 @@
           body: JSON.stringify({ key })
         });
         const data = await res.json();
-        if (!data || !data.ok) setErr((data && data.error) || "ACK failed");
+        if (!data || !data.ok) {
+          // Revert and force a refresh so the real state is shown.
+          clientPatches.delete(key);
+          setErr((data && data.error) || "ACK failed");
+          await refreshAfterAction();
+        }
+        // On success: client patch holds the acked state for CLIENT_PATCH_TTL_MS.
+        // Regular poll will confirm — no immediate refresh needed.
       } catch (e) {
+        clientPatches.delete(key);
         setErr(e && e.message ? e.message : String(e));
+        await refreshAfterAction();
       }
-
-      await refreshAfterAction();
     }
 
     function escapeHtml(s) {
