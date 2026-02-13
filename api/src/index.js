@@ -45,6 +45,7 @@ const ZONE_ACK_COL = {
 
 const _rowCache = new Map();
 const _rowInflight = new Map();
+const _lastGoodRows = new Map();
 const GOOGLE_FETCH_TIMEOUT_MS = 12_000;
 const INFLIGHT_TIMEOUT_MS = 15_000;
 
@@ -84,26 +85,38 @@ async function cachedRows(key, fn) {
   const now = Date.now();
   const hit = _rowCache.get(key);
   if (hit && (now - hit.ts) <= ROW_CACHE_MS) {
-    if (Array.isArray(hit.val)) {
-      return hit.val.map(applyPatchesToRowObj);
+    if (Array.isArray(hit.rows)) {
+      return { ok: true, rows: hit.rows.map(applyPatchesToRowObj), stale: false };
     }
-    return hit.val;
+    return { ok: true, rows: [], stale: false };
   }
 
   if (_rowInflight.has(key)) return _rowInflight.get(key);
 
+  let timeoutTriggered = false;
   const onInflightTimeout = () => {
+    timeoutTriggered = true;
     console.warn(`[timeout] row inflight cache key=${key} exceeded ${INFLIGHT_TIMEOUT_MS}ms; clearing inflight entry`);
     _rowInflight.delete(key);
   };
 
   const p = (async () => {
     try {
-      const val = await withTimeout(Promise.resolve().then(fn), INFLIGHT_TIMEOUT_MS, `cachedRows(${key})`, onInflightTimeout);
-      _rowCache.set(key, { ts: Date.now(), val });
-      return val;
+      const rows = await withTimeout(Promise.resolve().then(fn), INFLIGHT_TIMEOUT_MS, `cachedRows(${key})`, onInflightTimeout);
+      const nowTs = Date.now();
+      _rowCache.set(key, { ts: nowTs, rows });
+      _lastGoodRows.set(key, { ts: nowTs, rows });
+      return { ok: true, rows, stale: false };
     } catch (err) {
-      console.warn(`[rows] cache fetch failed key=${key}: ${err && err.message ? err.message : String(err)}`);
+      const msg = err && err.message ? err.message : String(err);
+      const lastGood = _lastGoodRows.get(key);
+      const warning = timeoutTriggered
+        ? `Timed out refreshing rows for ${key}; showing cached data.`
+        : `Refresh failed for ${key}; showing cached data.`;
+      console.warn(`[rows] cache fetch failed key=${key}: ${msg}`);
+      if (lastGood && Array.isArray(lastGood.rows)) {
+        return { ok: true, rows: lastGood.rows.map(applyPatchesToRowObj), stale: true, warning, lastGoodTs: lastGood.ts };
+      }
       throw err;
     } finally {
       _rowInflight.delete(key);
@@ -1181,8 +1194,13 @@ export default {
         const params = {
           opsDay: url.searchParams.get("opsDay") || "current",
         };
-        const rows = await dispatchRows(env, params);
-        return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
+        try {
+          const out = await dispatchRows(env, params);
+          return withCors(json({ ok:true, rows: out.rows || [], stale: !!out.stale, warning: out.warning || "", generatedAt: new Date().toISOString() }), origin);
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : String(err);
+          return withCors(json({ ok:false, error: `Unable to load dispatch rows and no cached data is available: ${msg}` }, { status: 500 }), origin);
+        }
       }
 
       if (path === "/dispatch/update" && req.method === "PATCH") {
@@ -1214,8 +1232,13 @@ export default {
           q: url.searchParams.get("q") || "",
           opsDay: url.searchParams.get("opsDay") || "current",
         };
-        const rows = await leadRows(env, params);
-        return withCors(json({ ok:true, rows, generatedAt: new Date().toISOString() }), origin);
+        try {
+          const out = await leadRows(env, params);
+          return withCors(json({ ok:true, rows: out.rows || [], stale: !!out.stale, warning: out.warning || "", generatedAt: new Date().toISOString() }), origin);
+        } catch (err) {
+          const msg = (err && err.message) ? err.message : String(err);
+          return withCors(json({ ok:false, error: `Unable to load lead rows and no cached data is available: ${msg}` }, { status: 500 }), origin);
+        }
       }
 
       if (path === "/lead/update" && req.method === "PATCH") {

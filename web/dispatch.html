@@ -67,6 +67,7 @@
     let opsDayMode = "current";
     let opsDayEnabled = false;
     let rowsRequestMeta = null;
+    let staleNotice = "";
 
     function getTorontoParts(date = new Date()) {
       const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -118,7 +119,15 @@
     function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
     function hardRedirectToLogin() { window.location.href = "/"; }
 
-    function setErr(msg) { document.getElementById("err").textContent = msg || ""; }
+    function renderBanner(errMsg = "") {
+      const el = document.getElementById("err");
+      const bits = [];
+      if (errMsg) bits.push(errMsg);
+      if (staleNotice) bits.push(staleNotice);
+      el.textContent = bits.join(" • ");
+    }
+
+    function setErr(msg) { renderBanner(msg || ""); }
 
     function logout() {
       localStorage.removeItem(LS_TOKEN);
@@ -226,6 +235,7 @@
       }, LOAD_TIMEOUT_MS);
 
       setErr("");
+      staleNotice = "";
       try {
         const url = new URL(API_BASE + "/dispatch/rows");
         url.searchParams.set("opsDay", opsDayMode);
@@ -241,6 +251,8 @@
           return false;
         }
         rows = data.rows || [];
+        staleNotice = data && data.stale ? (data.warning || "Showing cached data") : "";
+        renderBanner("");
         render();
         return true;
       } catch (e) {
