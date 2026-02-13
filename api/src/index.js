@@ -746,6 +746,29 @@ async function dispatchRows(env, params) {
   return cachedRows(`dispatch:${opsDay}`, () => dispatchRowsImpl(env, opsDay));
 }
 
+function buildDispatchRowsResponse(payload, origin, extraHeaders = {}) {
+  const headers = {
+    "cache-control": "public, max-age=2, s-maxage=10, stale-while-revalidate=60",
+    ...extraHeaders,
+  };
+  return withCors(json(payload, { headers }), origin);
+}
+
+async function refreshDispatchRowsAndCache(env, opsDay, origin, cacheKey) {
+  try {
+    const out = await dispatchRows(env, { opsDay });
+    const res = buildDispatchRowsResponse({
+      ok: true,
+      rows: out.rows || [],
+      generatedAt: new Date().toISOString(),
+      stale: false,
+    }, origin);
+    await caches.default.put(cacheKey, res.clone());
+  } catch (err) {
+    console.warn("[dispatch/rows] background refresh failed", err && err.message ? err.message : err);
+  }
+}
+
 
 function isTrue(v) {
   if (v === true) return true;
@@ -1191,15 +1214,38 @@ export default {
       // ---- dispatch ----
       if (path === "/dispatch/rows" && req.method === "GET") {
         await requireAuth(req, env, "dispatch");
-        const params = {
-          opsDay: url.searchParams.get("opsDay") || "current",
-        };
+        const opsDay = normalizeOpsDay(url.searchParams.get("opsDay") || "current");
+        const cacheUrl = new URL(url.toString());
+        cacheUrl.searchParams.set("opsDay", opsDay);
+        const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
+        const cached = await caches.default.match(cacheKey);
+        if (cached) {
+          ctx.waitUntil(refreshDispatchRowsAndCache(env, opsDay, origin, cacheKey));
+          return withCors(cached, origin);
+        }
+
         try {
-          const out = await dispatchRows(env, params);
-          return withCors(json({ ok:true, rows: out.rows || [], stale: !!out.stale, warning: out.warning || "", generatedAt: new Date().toISOString() }), origin);
+          const out = await dispatchRows(env, { opsDay });
+          const res = buildDispatchRowsResponse({
+            ok: true,
+            rows: out.rows || [],
+            generatedAt: new Date().toISOString(),
+            stale: false,
+          }, origin);
+          await caches.default.put(cacheKey, res.clone());
+          return res;
         } catch (err) {
-          const msg = (err && err.message) ? err.message : String(err);
-          return withCors(json({ ok:false, error: `Unable to load dispatch rows and no cached data is available: ${msg}` }, { status: 500 }), origin);
+          const staleCache = await caches.default.match(cacheKey);
+          if (staleCache) {
+            const h = new Headers(staleCache.headers);
+            h.set("x-prm-stale", "1");
+            return withCors(new Response(staleCache.body, {
+              status: staleCache.status,
+              statusText: staleCache.statusText,
+              headers: h,
+            }), origin);
+          }
+          return withCors(json({ ok:false, error: "Dispatch rows timeout" }, { status: 504 }), origin);
         }
       }
 
