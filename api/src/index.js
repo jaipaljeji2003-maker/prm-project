@@ -1218,7 +1218,10 @@ export default {
         const cacheUrl = new URL(url.toString());
         cacheUrl.searchParams.set("opsDay", opsDay);
         const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
-        const cached = await caches.default.match(cacheKey);
+
+        // Cache lookup is best-effort — workers.dev and some configurations throw here.
+        let cached = null;
+        try { cached = await caches.default.match(cacheKey); } catch (_) {}
         if (cached) {
           ctx.waitUntil(refreshDispatchRowsAndCache(env, opsDay, origin, cacheKey));
           return withCors(cached, origin);
@@ -1232,10 +1235,13 @@ export default {
             generatedAt: new Date().toISOString(),
             stale: false,
           }, origin);
-          await caches.default.put(cacheKey, res.clone());
+          // Cache put is best-effort — never discard successfully-fetched data if it fails.
+          try { await caches.default.put(cacheKey, res.clone()); } catch (_) {}
           return res;
         } catch (err) {
-          const staleCache = await caches.default.match(cacheKey);
+          const msg = (err && err.message) ? err.message : String(err);
+          let staleCache = null;
+          try { staleCache = await caches.default.match(cacheKey); } catch (_) {}
           if (staleCache) {
             const h = new Headers(staleCache.headers);
             h.set("x-prm-stale", "1");
@@ -1245,7 +1251,7 @@ export default {
               headers: h,
             }), origin);
           }
-          return withCors(json({ ok:false, error: "Dispatch rows timeout" }, { status: 504 }), origin);
+          return withCors(json({ ok:false, error: msg || "Unable to load dispatch rows" }, { status: 504 }), origin);
         }
       }
 
@@ -1318,7 +1324,7 @@ export default {
 
     } catch (err) {
       const msg = (err && err.message) ? err.message : String(err);
-      return withCors(json({ ok:false, error: msg }, { status: /missing authorization|unauthorized|expired|no access/i.test(msg) ? 401 : 500 }), origin);
+      return withCors(json({ ok:false, error: msg }, { status: /missing authorization|unauthorized|expired|no access|invalid token/i.test(msg) ? 401 : 500 }), origin);
     }
   }
 };
